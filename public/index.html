@@ -385,15 +385,23 @@ function renderOk(d, ms){
   $('statsWrap').style.display = 'block';
 
   const f = d.fingerprint || {};
-  const c = f.cipher || {};
-  $('fp').innerHTML = [
+  const rows = [
+    ['Profil', f.profile === 'dispatcher' ? 'dispatcher (Norev-family)' : 'studiodev57'],
     ['Banner', f.banner || '—'],
-    ['Alphabet', `${f.alphabetLength} char`],
-    ['XOR index', `bxor(arg, ${f.xorA}) ${f.transformOp === 'sub' ? '−' : '+'} ${f.xorB}`],
-    ['Cipher', `M1=${c.M1} ADD=${c.ADD} I1=${c.I1} · I2=${c.I2} · M2=${c.M2} I3=${c.I3}`],
-    ['Variant', `len=p[${f.variant?.len}] stride=p[${f.variant?.stride}] ${f.variant?.chain ? 'chained' : 'plain'} ${f.variant?.order}`],
-    ['String bersih', `${((f.cleanRatio ?? 0) * 100).toFixed(1)}%`],
-  ].map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(String(v))}</dd>`).join('');
+  ];
+  if (f.profile === 'dispatcher') {
+    rows.push(['Tabel string', `${f.entries} entri · getter #${f.getterIdx}`]);
+    rows.push(['Cipher', (f.ciphers || []).map(c => `*${c.mul}+${c.add}+j*${c.mul2}`).join('  ·  ')]);
+    rows.push(['Varian', (f.variantMap || []).map(v => `sel ${v.sel} → *${v.mul}`).join('  ·  ')]);
+  } else {
+    const c = f.cipher || {};
+    rows.push(['Alphabet', `${f.alphabetLength} char`]);
+    rows.push(['XOR index', `bxor(arg, ${f.xorA}) ${f.transformOp === 'sub' ? '−' : '+'} ${f.xorB}`]);
+    rows.push(['Cipher', `M1=${c.M1} ADD=${c.ADD} I1=${c.I1} · I2=${c.I2} · M2=${c.M2} I3=${c.I3}`]);
+    rows.push(['Variant', `len=p[${f.variant?.len}] stride=p[${f.variant?.stride}] ${f.variant?.chain ? 'chained' : 'plain'} ${f.variant?.order}`]);
+  }
+  rows.push(['String bersih', `${((f.cleanRatio ?? 0) * 100).toFixed(1)}%`]);
+  $('fp').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(String(v))}</dd>`).join('');
   $('fpWrap').style.display = 'block';
 
   const notes = d.notes || [];
@@ -467,7 +475,7 @@ function escapeHtml(s){
 }
 function showErr(msg, detail){
   $('err').innerHTML = msg
-    ? `<div class="alert err"><span>✕</span><span><b>${escapeHtml(msg)}</b>${detail ? '<br>' + escapeHtml(detail) : ''}</span></div>`
+    ? `<div class="alert err"><span>✕</span><span><b>${escapeHtml(msg)}</b>${detail ? '<br>' + escapeHtml(detail).replace(/\n/g, '<br>') : ''}</span></div>`
     : '';
 }
 

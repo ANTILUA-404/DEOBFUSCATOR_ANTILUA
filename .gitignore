@@ -14,3 +14,7 @@ variant.luau
 
 # archives
 *.zip
+
+# generated test fixtures
+_synthetic_dispatcher.luau
+_syn_out.luau
