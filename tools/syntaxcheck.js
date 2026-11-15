@@ -27,6 +27,7 @@ function toLua51(src) {
   const out = [];
   for (const t of toks) {
     if (t.t === 'op' && ASSIGN_OPS.has(t.v)) { out.push('='); continue; }
+    if (t.t === 'op' && t.v === '//') { out.push('/'); continue; }   // integer division
     if (t.t === 'name' && t.v === 'continue') { out.push('break'); continue; }
     out.push(t.t === 'str' ? t.raw : t.v);
   }

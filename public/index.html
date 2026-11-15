@@ -377,22 +377,32 @@ function renderOk(d, ms){
   $('codeBox').style.display = 'block';
   $('actions').style.display = 'flex';
 
-  $('stats').innerHTML = [
-    ['String', s.replaced], ['Unik', s.uniqueStrings], ['Entri', s.tableEntries],
-    ['Konst.', s.constantsFolded], ['Rename', s.identifiersRenamed],
-    ['Semantik', s.semanticNames], ['Baris', d.code.split('\n').length],
-  ].map(([k, v]) => `<div class="stat"><b>${(v ?? 0).toLocaleString('id-ID')}</b><span>${k}</span></div>`).join('');
+  const isPlain = s.profile === 'plain';
+  const cards = isPlain
+    ? [['Konstanta', s.constantsFolded], ['Rename', s.identifiersRenamed],
+       ['KB masuk', Math.round((s.inputBytes || 0) / 1024)], ['KB keluar', Math.round((s.outputBytes || 0) / 1024)],
+       ['Baris', d.code.split('\n').length]]
+    : [['String', s.replaced], ['Unik', s.uniqueStrings], ['Entri', s.tableEntries],
+       ['Konst.', s.constantsFolded], ['Rename', s.identifiersRenamed],
+       ['Semantik', s.semanticNames], ['Baris', d.code.split('\n').length]];
+  $('stats').innerHTML = cards
+    .map(([k, v]) => `<div class="stat"><b>${(v ?? 0).toLocaleString('id-ID')}</b><span>${k}</span></div>`).join('');
   $('statsWrap').style.display = 'block';
 
   const f = d.fingerprint || {};
+  const PROFIL = { studiodev57: 'studiodev57', dispatcher: 'dispatcher (Norev-family)', plain: 'constant-only' };
   const rows = [
-    ['Profil', f.profile === 'dispatcher' ? 'dispatcher (Norev-family)' : 'studiodev57'],
+    ['Profil', PROFIL[f.profile] || 'studiodev57'],
     ['Banner', f.banner || '—'],
   ];
   if (f.profile === 'dispatcher') {
     rows.push(['Tabel string', `${f.entries} entri · getter #${f.getterIdx}`]);
     rows.push(['Cipher', (f.ciphers || []).map(c => `*${c.mul}+${c.add}+j*${c.mul2}`).join('  ·  ')]);
     rows.push(['Varian', (f.variantMap || []).map(v => `sel ${v.sel} → *${v.mul}`).join('  ·  ')]);
+  } else if (f.profile === 'plain') {
+    rows.push(['Grup konstanta', `${(f.arithGroups ?? 0).toLocaleString('id-ID')}`]);
+    rows.push(['Nama mangled', `${(f.mangledNames ?? 0).toLocaleString('id-ID')}`]);
+    rows.push(['Catatan', 'tidak ada tabel string terenkripsi']);
   } else {
     const c = f.cipher || {};
     rows.push(['Alphabet', `${f.alphabetLength} char`]);
