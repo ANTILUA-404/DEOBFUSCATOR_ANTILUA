@@ -237,6 +237,20 @@ check('a truncated lift is rejected even with zero nil calls', () => {
   assert.match(reason, /upvalue\(s\) assigned as globals/, 'scope loss must be reported');
 });
 
+check('a small correct lift is not rejected by size alone', () => {
+  const { judgeLift, describeLiftFailure } = require('../engines/luraph/src/driver');
+  // The Luraph fixture is a 286 KB chunk whose real script is two lines. The
+  // first version of the size rule rejected exactly this correct lift with
+  // "output is 31 bytes against a 286259 byte input (<1%)", so the ratio must
+  // never fire on its own -- only alongside a structural tell.
+  const verdict = judgeLift('-- proto 32\nprint("blah blah")\n', { sourceBytes: 286259 });
+  assert.strictEqual(verdict.ok, true,
+    'a tiny output from a huge input is legitimate: ' + verdict.problems.join('; '));
+  assert.strictEqual(verdict.sizeCollapsed, true,
+    'the ratio is still measured, it simply must not gate on its own');
+  assert.strictEqual(describeLiftFailure(verdict), '', 'no reason should be reported');
+});
+
 check('a genuine lift still passes the structural judge', () => {
   const { judgeLift } = require('../engines/luraph/src/driver');
   const real = [

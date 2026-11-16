@@ -4426,6 +4426,45 @@ def _vm_roots(prog):
             payload = tag
             vms.sort(key=lambda kv: kv[0] == payload)
             break
+
+    # Execution evidence: envlog counts one entry per statement executed in the
+    # innermost script frame, "so which captured functions do the script's work
+    # -- the payload roots are found from it". That data was being collected and
+    # then ignored, so a file whose payload is its own single-proto VM (36 protos
+    # captured, only proto 32 ever ran) had the wrong root picked and lifted a
+    # 12-line stub built from VM bookkeeping instead of the script.
+    #
+    # A proto that emitted statements is by definition part of the script; one
+    # that emitted nothing is bootstrap or a loader that never ran. Promote the
+    # highest-emitting proto that no earlier rule already chose.
+    emits = prog.dump.raw.get("emit") or {}
+    if emits and not os.environ.get("DEVIRT_NO_EMIT_ROOT"):
+        best = None
+        for tag, lst in vms:
+            for seq, pid, cap in lst:
+                n = emits.get(str(pid)) or emits.get(pid) or 0
+                try:
+                    n = int(n)
+                except (TypeError, ValueError):
+                    n = 0
+                if n <= 0:
+                    continue
+                if best is None or n > best[0]:
+                    best = (n, tag, seq, pid)
+        if best is not None:
+            _, tag, seq, pid = best
+            for t, lst in vms:
+                hit = [x for x in lst if x[0] == seq and str(x[1]) == str(pid)]
+                if hit:
+                    lst.remove(hit[0])
+                    lst.insert(0, hit[0])
+                    payload = t
+                    vms.sort(key=lambda kv: kv[0] == payload)
+                    if os.environ.get("DEVIRT_DEBUG"):
+                        sys.stderr.write(
+                            "[*] root chosen from execution evidence: proto #%s "
+                            "(%d statements emitted)\n" % (pid, best[0]))
+                    break
     return vms, payload
 
 def program_roots(prog):

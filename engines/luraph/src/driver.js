@@ -52,13 +52,12 @@ function judgeLift(lifted, opts = {}) {
     problems.push(`${nilCalls} unresolved calls of nil across ${lines} lines`);
   }
 
-  // 2. A lift that is a rounding error next to its input was cut short. Real
-  //    source can legitimately be smaller than its obfuscated form, but not by
-  //    two orders of magnitude: this catches a stub standing in for a script.
-  if (sourceBytes > 20000 && bytes * 100 < sourceBytes) {
-    problems.push(`output is ${bytes} bytes against a ${sourceBytes} byte input `
-      + `(<1%), so the lift stopped early`);
-  }
+  // 2. A lift that is a rounding error next to its input is usually a stub, but
+  //    the ratio alone cannot decide it: a 286 KB obfuscated file can legitimately
+  //    hold a 2-line script, and this rule once rejected exactly that correct
+  //    lift. Size collapse therefore only counts as evidence when the output
+  //    also fails a structural check -- the real tells are below.
+  const sizeCollapsed = sourceBytes > 20000 && bytes * 100 < sourceBytes;
 
   // 3. Dead branches: `if nil` / `if false` can never take the then-branch, so
   //    the represented control flow is not the real one.
@@ -86,6 +85,16 @@ function judgeLift(lifted, opts = {}) {
       + `(${[...upvalueGlobals].slice(0, 6).join(', ')})`);
   }
 
+  // These three are the signs of a stub assembled from VM bookkeeping: control
+  // flow that cannot run, scope that was lost, or a body with no behaviour. A
+  // small output on its own is not a defect, so the ratio is only reported when
+  // one of them already fired.
+  const looksLikeStub = deadBranches > 0 || dupBranches > 0 || upvalueGlobals.size > 0;
+  if (sizeCollapsed && looksLikeStub) {
+    problems.push(`output is ${bytes} bytes against a ${sourceBytes} byte input (<1%), `
+      + 'so the lift stopped early');
+  }
+
   // 6. A lift with no structure at all: no function, no call, no string.
   const hasCall = /\w\s*\(/.test(lifted);
   const hasString = /["']/.test(lifted);
@@ -104,6 +113,7 @@ function judgeLift(lifted, opts = {}) {
     deadBranches,
     dupBranches,
     upvalueGlobals: [...upvalueGlobals],
+    sizeCollapsed,
     problems,
   };
 }
