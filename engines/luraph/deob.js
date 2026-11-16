@@ -199,12 +199,36 @@ async function processFile(absInput, args) {
       result = await driver.runGeneric(job);
     }
 
-    if (final && result && fs.existsSync(result)) {
-      let content = fs.readFileSync(result, 'utf8');
+    // driver.run/runGeneric return {path, kind, reason, stats}. A behaviour
+    // trace is a partial reconstruction and must never be handed upward as if
+    // it were the full source, so the kind travels with the path.
+    const resultPath = typeof result === 'string' ? result : (result && result.path);
+    const kind = typeof result === 'string' ? 'unknown' : (result && result.kind);
+    const reason = typeof result === 'string' ? null : (result && result.reason);
+    const stats = typeof result === 'string' ? null : (result && result.stats);
+
+    if (final && resultPath && fs.existsSync(resultPath)) {
+      let content = fs.readFileSync(resultPath, 'utf8');
+      // Strip the engine's own banner comments, but keep any OUTPUT-KIND notice:
+      // it has to survive into the artifact, because a file on disk cannot be
+      // told apart from a full decompile once the log is gone.
+      const notices = content.split('\n').filter((l) => /^\s*--\s*OUTPUT-KIND:/.test(l));
       content = content.replace(/^(\s*--(?:[ \t]*(?:Deobfuscated by|Detected obfuscation|Local names are inferred|source:|NOTE: reconstructed|during the trace)[^\n]*\n?|\s*\n))+/, '');
+      if (notices.length && !/^\s*--\s*OUTPUT-KIND:/m.test(content)) {
+        content = notices.join('\n') + '\n' + content;
+      }
       fs.writeFileSync(final, content, 'utf8');
       process.stderr.write(`[+] result: ${final}\n`);
-      return final;
+      if (kind === 'trace') {
+        process.stderr.write('[!] OUTPUT-KIND: trace. Partial reconstruction of the executed paths, '
+          + 'not the full original source.\n');
+        if (reason) process.stderr.write(`[!] reason: ${reason}\n`);
+      } else if (kind === 'devirtualized') {
+        process.stderr.write('[*] OUTPUT-KIND: devirtualized source'
+          + (stats ? ` (${stats.stmts} statements, ${stats.nilCalls} unresolved calls)` : '') + '\n');
+      }
+      if (stats) process.stderr.write(`[*] OUTPUT-STATS ${JSON.stringify(stats)}\n`);
+      return { path: final, kind, reason, stats };
     }
     process.stderr.write(`[!] no result for ${path.basename(absInput)}\n`);
     return null;

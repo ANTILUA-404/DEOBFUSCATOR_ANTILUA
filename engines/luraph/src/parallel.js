@@ -110,13 +110,35 @@ async function runCandidates(cfgData, job) {
                       (runs.indexOf(a) - runs.indexOf(b)));
     winner = ok[0] || null;
   }
+  // A candidate with statistics but no .dpath means the lifter wrote stats and
+  // then died before emitting source. Treating it as a winner would hand the
+  // caller a path that does not exist.
+  if (winner && !fs.existsSync(winner.own.dpath)) {
+    process.stderr.write(`[!] candidate ${winner.c.label} reported stats but wrote no output; discarding\n`);
+    winner = null;
+  }
   if (!winner) {
-    for (const r of runs) process.stderr.write(r.log.slice(-1500));
+    for (const r of runs) {
+      process.stderr.write(`--- candidate ${r.c.label} (exit ${r.code}, ${r.secs ? r.secs.toFixed(0) : '?'}s) ---\n`);
+      process.stderr.write(r.log.slice(-1500) || '(no output)\n');
+    }
     throw new Error('every devirtualization candidate failed');
   }
   if (cands.length > 1) {
     process.stderr.write(`[*] keeping candidate ${winner.c.label} (${winner.stats.errors} unlifted blocks, ${winner.stats.functions} functions)\n`);
     fs.copyFileSync(winner.own.dpath, cfgData.dpath);
+  }
+
+  // Losing candidates' reasons were previously discarded, which made a partial
+  // lift impossible to explain after the fact. Keep one short line each.
+  if (process.env.DEOB_DEBUG_CANDIDATES && cands.length > 1) {
+    for (const r of runs) {
+      if (r === winner) continue;
+      process.stderr.write(`[*]   ${r.c.label} rejected: `
+        + (r.stats ? `${r.stats.errors} unlifted blocks` : `no lift (exit ${r.code})`) + '\n');
+      const tail = (r.log || '').trim().split('\n').slice(-6).join('\n');
+      if (tail) process.stderr.write(tail + '\n');
+    }
   }
 
   for (const r of runs) {

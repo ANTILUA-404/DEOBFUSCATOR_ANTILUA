@@ -22,6 +22,22 @@ function patchChunk(src, tmpdir, chunkTag) {
   }
 }
 
+/**
+ * Decide whether a devirtualized lift is usable.
+ *
+ * The old rule was a single `(nil)(` count, which is a poor proxy: a short but
+ * legitimate lift could be rejected, and the caller was never told that the
+ * result had been swapped for a behaviour trace. Both outcomes are now returned
+ * as data so the API can label them instead of silently downgrading.
+ */
+function judgeLift(lifted) {
+  const nilCalls = (lifted.match(/\(nil\)\(/g) || []).length;
+  const lines = lifted.split('\n').length;
+  const stmts = (lifted.match(/[;{}]|\b(?:local|function|end|return|if|for|while)\b/g) || []).length;
+  const broken = nilCalls >= 50 && nilCalls * 100 >= lines;
+  return { ok: !broken, nilCalls, lines, stmts };
+}
+
 async function run(job) {
   const { args } = job;
   const devirtOn = !args.noDevirt;
@@ -47,6 +63,7 @@ async function run(job) {
   let body = null;
   let trapped = null;
   let cfg = null;
+  let liftFailure = null;
 
   for (let attempt = 1; attempt <= args.maxRuns; attempt++) {
     cfg = {
@@ -126,15 +143,25 @@ async function run(job) {
   const [b4, strings] = trace.takeStrings(body);
   body = b4;
 
-  const notes = skip.length ? [`anti-tamper trap functions disabled: ${skip.map(p => '#' + p).join(', ')}`] : [];
-  const text = trace.header(job.input, notes) + body;
+  // The trace is the executed subset of the program. Say so in the artifact
+  // itself, because a reader cannot tell a full decompile from a partial trace
+  // once the file is on disk.
+  const noteHeader = 'OUTPUT-KIND: trace (not devirtualized) - only code paths executed during tracing are present';
+  const antiTamperNote = skip.length
+    ? 'this trace skipped anti-tamper-guarded functions, so it is incomplete'
+    : null;
 
-  function writeTrace() {
-    job.write(job.tracePath, tidy.tidy(text, { preamble: !args.keepPreamble }));
-  }
-
-  if (!devirtOn && !job.debug) {
-    writeTrace();
+  // writeTrace is deferred until the lift outcome is known, so the artifact's
+  // own banner can name the real reason instead of a generic one.
+  function writeTrace(failureReason) {
+    const notes = [noteHeader];
+    if (antiTamperNote) notes.push(antiTamperNote);
+    if (failureReason) notes.push(`reason: ${failureReason}`);
+    // tidy() runs on the body only. Running it over header+body used to work by
+    // accident; keeping the two separate means the banner can never be eaten by
+    // the formatter (stripPreamble cuts everything above the last known marker).
+    const tidied = tidy.tidy(body, { preamble: !args.keepPreamble });
+    job.write(job.tracePath, trace.header(job.input, notes) + tidied);
   }
 
   if (strings) job.write(job.path('.strings.txt'), strings);
@@ -144,6 +171,7 @@ async function run(job) {
     const ppath = job.path('.protos.json');
     if (protosJson.startsWith('error:')) {
       process.stderr.write(`[!] proto capture failed: ${protosJson}\n`);
+      liftFailure = `proto capture failed: ${protosJson}`;
     } else {
       job.write(ppath, protosJson);
       if (devirtOn) {
@@ -178,9 +206,16 @@ async function run(job) {
         };
         // Python stage: several candidates in parallel (PyPy + fixed hash seeds),
         // best result kept -- see src/parallel.js. DEOB_KEEP_CFG=1 keeps the inputs.
-        await require('./parallel').runCandidates(cfgData, job);
+        try {
+          await require('./parallel').runCandidates(cfgData, job);
+        } catch (e) {
+          liftFailure = e.message || String(e);
+          process.stderr.write(`[!] devirtualization failed: ${liftFailure}\n`);
+        }
       }
     }
+  } else {
+    liftFailure = 'the trace produced no VM prototype data to lift';
   }
 
   runner.finish();
@@ -188,22 +223,31 @@ async function run(job) {
 
   if (devirtOn && fs.existsSync(dpath)) {
     const lifted = fs.readFileSync(dpath, 'utf8');
-    const nilCalls = (lifted.match(/\(nil\)\(/g) || []).length;
-    const lines = lifted.split('\n').length;
-    if (nilCalls < 50 || nilCalls * 100 < lines) {
-      return dpath;
+    const verdict = judgeLift(lifted);
+    if (verdict.ok) {
+      process.stderr.write(`[*] devirtualized: ${verdict.stmts} statements, ${verdict.lines} lines, `
+        + `${verdict.nilCalls} unresolved calls\n`);
+      return { path: dpath, kind: 'devirtualized', stats: verdict };
     }
-    process.stderr.write(`[!] the devirtualized output is broken (${nilCalls} calls of nil); writing behaviour trace instead\n`);
+    process.stderr.write(`[!] the devirtualized output looks broken (${verdict.nilCalls} calls of nil `
+      + `across ${verdict.lines} lines); falling back to a behaviour trace\n`);
+    liftFailure = `the lifter produced ${verdict.nilCalls} unresolved calls of nil across ${verdict.lines} lines`;
     if (!job.debug) { try { fs.unlinkSync(dpath); } catch {} }
-    writeTrace();
-    return job.tracePath;
   }
 
-  if (devirtOn) {
-    process.stderr.write('[!] devirtualization produced no output; writing behaviour trace\n');
-    if (!fs.existsSync(job.tracePath)) writeTrace();
+  if (devirtOn && !liftFailure) liftFailure = 'the lifter produced no output';
+  if (!devirtOn) liftFailure = null;   // devirtualization was switched off on purpose
+
+  if (!liftFailure) {
+    process.stderr.write('[*] writing behaviour trace (devirtualization disabled with --no-devirt)\n');
+  } else {
+    process.stderr.write('[!] devirtualization produced no usable source; writing behaviour trace '
+      + '(this is a PARTIAL reconstruction)\n');
   }
-  return job.tracePath;
+  // Always rewrite the trace so it carries the failure reason, even when an
+  // earlier branch already wrote an unlabelled copy.
+  if (!job.debug) writeTrace(liftFailure);
+  return { path: job.tracePath, kind: 'trace', reason: liftFailure, stats: null };
 }
 
 async function runGeneric(job) {
@@ -230,14 +274,16 @@ async function runGeneric(job) {
   body = harness.p2dMiss(body, cachePath);
   const { body: cleanBody } = harness.takeChunks(body);
   body = cleanBody;
-  const [b2, strings] = trace.takeStrings(body);
-  body = b2;
+  const [cleanTrace, strings] = trace.takeStrings(body);
+  body = cleanTrace;
 
-  const text = trace.header(job.input) + body;
-  job.write(job.tracePath, tidy.tidy(text, { preamble: false }));
+  const text = trace.header(job.input, [
+    'OUTPUT-KIND: trace (not devirtualized) - only code paths executed during tracing are present',
+  ]) + tidy.tidy(body, { preamble: false });
+  job.write(job.tracePath, text);
   if (strings) job.write(job.path('.strings.txt'), strings);
   trace.statusLine(body);
-  return job.tracePath;
+  return { path: job.tracePath, kind: 'trace', reason: 'this obfuscator has no devirtualizer; the engine only records behaviour', stats: null };
 }
 
-module.exports = { run, runGeneric };
+module.exports = { run, runGeneric, judgeLift };

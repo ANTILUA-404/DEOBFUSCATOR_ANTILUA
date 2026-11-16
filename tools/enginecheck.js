@@ -161,6 +161,68 @@ check('Luau smoke script passes on the vendored interpreter', (t) => {
   assert.ok(probe.binPath.endsWith(probe.bin));
 });
 
+check('a behaviour trace is never presented as full source', () => {
+  // The engine labels its own output; that label is the single source of truth.
+  const traceLog = '[*] OUTPUT-KIND: trace. Partial reconstruction\n'
+    + '[!] reason: the lifter produced 812 unresolved calls of nil across 40 lines\n'
+    + 'OUTPUT-STATS {"ok":false,"nilCalls":812,"lines":40,"stmts":12}\n';
+  const kind = luraph.readOutputKind(traceLog, '-- OUTPUT-KIND: trace\nprint(1)\n');
+  assert.strictEqual(kind.outputKind, 'trace');
+  assert.match(kind.liftReason, /812 unresolved calls/);
+  assert.strictEqual(kind.liftStats.nilCalls, 812);
+
+  const devirtLog = '[*] OUTPUT-KIND: devirtualized source (120 statements)\n'
+    + 'OUTPUT-STATS {"ok":true,"nilCalls":0,"lines":300,"stmts":120}\n';
+  const good = luraph.readOutputKind(devirtLog, 'print(1)\n');
+  assert.strictEqual(good.outputKind, 'devirtualized');
+  assert.strictEqual(good.liftStats.stmts, 120);
+});
+
+check('the lift judge rejects a nil-riddled result but keeps a short valid one', () => {
+  const { judgeLift } = require('../engines/luraph/src/driver');
+
+  const broken = 'local a = (nil)(1)\n'.repeat(200);
+  assert.strictEqual(judgeLift(broken).ok, false, 'a nil-riddled lift must be rejected');
+
+  // A short but legitimate lift must survive: the old rule could not tell them
+  // apart because it only counted (nil)( occurrences.
+  const short = 'local x = 1\nprint(x)\nreturn x\n';
+  const verdict = judgeLift(short);
+  assert.strictEqual(verdict.ok, true, 'a short valid lift must be accepted');
+  assert.strictEqual(verdict.nilCalls, 0);
+  assert.ok(verdict.stmts > 0, 'statement count must be reported');
+});
+
+check('a candidate with stats but no output file is not declared the winner', () => {
+  const parallel = require('../engines/luraph/src/parallel');
+  // parseStats reads the lifter's own summary lines; verify it does not claim a
+  // lift when the log has no stats block at all (the wFUa1Q failure mode).
+  assert.strictEqual(parallel.parseStats('[!] something broke\n'), null);
+  const stats = parallel.parseStats('[*] 120 functions, 0 unlifted blocks\n');
+  assert.deepStrictEqual(stats, { functions: 120, errors: 0 });
+});
+
+check('trace bookkeeping markers do not survive into the output', () => {
+  const tidy = require('../engines/luraph/src/tidy');
+  // envlog emits "file:statement" pairs as its own bookkeeping. They are not
+  // Lua and one landed verbatim on the line above the recovered payload.
+  const src = 'connection6:Disconnect()\n 32:26244\nprint("blah blah")\n';
+  const out = tidy.tidy(src, { preamble: false });
+  assert.doesNotMatch(out, /^\s*32:26244\s*$/m, 'bare N:M marker must be stripped');
+  assert.match(out, /print\("blah blah"\)/, 'real code must survive');
+  assert.match(out, /connection6:Disconnect\(\)/, 'surrounding code must survive');
+});
+
+check('the trace banner cannot be eaten by the formatter', () => {
+  const tidy = require('../engines/luraph/src/tidy');
+  const traceout = require('../engines/luraph/src/traceout');
+  const header = traceout.header('x.luau', ['OUTPUT-KIND: trace', 'reason: the lifter produced no output']);
+  const body = tidy.tidy('  \nprint(1)\n', { preamble: true });
+  const artifact = header + body;
+  assert.match(artifact, /OUTPUT-KIND: trace/);
+  assert.match(artifact, /reason: the lifter produced no output/);
+});
+
 check('Prometheus label payload formats without a dangling local', () => {
   const sample = fs.readFileSync(path.join(root, 'tests/fixtures/prometheus/WeAreDevs.lua'), 'latin1');
   const result = deobfuscatePrometheus(sample);

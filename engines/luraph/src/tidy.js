@@ -73,6 +73,10 @@ function stripAnnotations(text) {
         /^--\s*\d+\s+statements recorded/.test(trimmed)) {
       continue;
     }
+    // Bare "N:M" pairs are envlog's internal statement bookkeeping (file id :
+    // statement id). They are not Lua and they landed in the output verbatim,
+    // e.g. a stray " 32:26244" on the line right before the recovered payload.
+    if (/^\d+:\d+$/.test(trimmed)) continue;
     clean.push(line);
   }
   return clean.join('\n').replace(/^\n+/, '');
