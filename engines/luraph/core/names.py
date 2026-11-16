@@ -5,7 +5,24 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-GENERATED = re.compile(r"^(?:[a-z]\d+(?:_\d+)*|arg\d+_*)$")
+# Names this pipeline mints itself, which the renamer is therefore free to
+# replace. Three shapes, and every one must match or a temporary leaks into the
+# output as an undeclared global:
+#
+#   * `<letter><digit>` + optional `_<digit>` runs -- `variables.rename` builds
+#     these as "%s%d" % (prefix, reg) + "_%d" per extra web on the same register
+#     (`r5`, `r2_1`, ...);
+#   * `<letters>_<digit>` -- a register that the "-N" suffix alone names when the
+#     prefix carries no digits before it (`c_1`, `p_1`, `N_1`). The letter class
+#     is both cases because those were measured surviving a real lift; the v15
+#     lifter's own REG_PREFIX is lowercase, so an uppercase one comes from a
+#     second mint site rather than from human intent;
+#   * `arg<digit>` -- function parameters.
+#
+# None of these can collide with an authored name: a real identifier is never
+# `X9` or `x9_2`, and `str2` / `fn3` (which come from the naming pass's own
+# wordlist and must NOT be re-rolled) still fall outside the pattern.
+GENERATED = re.compile(r"^(?:[a-zA-Z]\d+(?:_\d+)*|[a-zA-Z]+_\d+|arg\d+_*)$")
 KEYWORDS = {"and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if", "in", "local",
             "nil", "not", "or", "repeat", "return", "then", "true", "until", "while", "continue", "type",
             "export", "self"}

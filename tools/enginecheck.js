@@ -342,12 +342,89 @@ check('unsupported corpus families are named, not called unknown', () => {
   }
 });
 
+check('hidden VM loop variables are reported, not passed as clean source', () => {
+  const { judgeLift, describeLiftFailure } = require('../engines/luraph/src/driver');
+  // codegen renders a Pseudo as `%s_%d`, and a Pseudo is never declared: when the
+  // for-loop it belongs to is not recognised, every use is left dangling as a
+  // global. A real v15.1 lift carried c_1 / p_1 / N_1 exactly this way and passed
+  // every other check, because Luau parses an unknown name as a global.
+  const leaked = [
+    'local function fn2(arg)',
+    '\tlocal n = #arg',
+    '\twhile true do',
+    '\t\tif c_1 <= 0 then',
+    '\t\t\tif p_1 >= N_1 then',
+    '\t\t\t\treturn p_1',
+    '\t\t\tend',
+    '\t\tend',
+    '\tend',
+    'end',
+    'print(fn2("x"))',
+  ].join('\n');
+  const verdict = judgeLift(leaked, { sourceBytes: 284180 });
+  assert.strictEqual(verdict.ok, false, 'undeclared loop variables must not read as clean source');
+  assert.deepStrictEqual(verdict.pseudoGlobals.sort(), ['N_1', 'c_1', 'p_1'],
+    'every leaked loop variable must be named');
+  assert.match(describeLiftFailure(verdict), /hidden VM loop variable/);
+
+  // Declaring the variable is the fix, and must clear the finding.
+  const declared = leaked.replace('local n = #arg', 'local n = #arg\n\tlocal c_1, p_1, N_1 = 0, 0, 0');
+  assert.strictEqual(judgeLift(declared, { sourceBytes: 284180 }).ok, true,
+    'a declared loop variable is not a leak');
+
+  // Ordinary names must never be reported: authored globals, the naming pass's
+  // wordlist, and register names (digits before the underscore) are other shapes.
+  for (const safe of ['Players', 'game', 'str2', 'fn3', 'r2_1', 'tbl', 'v2']) {
+    const src = `local a = ${safe}\nprint(a)\n`;
+    assert.strictEqual(judgeLift(src, { sourceBytes: 100 }).ok, true, `${safe} must not be flagged`);
+  }
+});
+
 check('every result starts with the ANTILUA credit line', () => {
   const sample = fs.readFileSync(path.join(root, '_synthetic_dispatcher.luau'), 'latin1');
   const result = deob.deobfuscate(sample);
   assert.ok(result.ok, 'dispatcher sample should decode');
   assert.ok(result.code.startsWith('-- Deobfuscated By ANTILUA DEOBFUSCATOR\n'),
     'first line was: ' + result.code.split('\n')[0]);
+});
+
+check('lifter-minted register names are renamed, not left as authored', (ctx) => {
+  // The renaming pass only rewrites names its own pipeline generates, decided by
+  // names.GENERATED. A real v15.1 lift emitted `<letter>_<digit>` names that the
+  // pattern did not match: it demanded digits *before* the underscore, so
+  // `x_1` fell through as if hand-written. They still appear as undeclared
+  // globals in that lift for a separate reason (hidden VM state printed by
+  // codegen, not a declared local), so this pins the pattern itself rather than
+  // claiming the lift is clean.
+  //
+  // Scope note: this check would have passed before the fix if it had used
+  // `local` declarations, because a declared `x_1` is a *local* and gets renamed
+  // by the ordinary path. It exercises the pattern directly for that reason.
+  let py;
+  try {
+    py = execFileSync('python', ['-c', [
+      'import sys',
+      `sys.path.insert(0, ${JSON.stringify(path.join(root, 'engines/luraph/core'))})`,
+      'import names',
+      'for n in ("c_1", "p_1", "N_1", "r5", "r2_1", "arg1"):',
+      '    print(n, bool(names.GENERATED.match(n)))',
+      'for n in ("Players", "str2", "cenzDonateRobuxSS", "fn"):',
+      '    print(n, bool(names.GENERATED.match(n)))',
+    ].join('\n')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (err) {
+    return ctx.skip('python not available to exercise the naming pass');
+  }
+  const seen = Object.fromEntries(py.trim().split('\n').map((l) => l.trim().split(' ')));
+  // Names the lifter mints: the renamer must be free to replace them.
+  for (const minted of ['c_1', 'p_1', 'N_1', 'r5', 'r2_1', 'arg1']) {
+    assert.strictEqual(seen[minted], 'True',
+      `${minted} is lifter-minted and must be treated as generated`);
+  }
+  // Names written by the script (or picked by the naming pass): leave alone.
+  for (const authored of ['Players', 'str2', 'cenzDonateRobuxSS', 'fn']) {
+    assert.strictEqual(seen[authored], 'False',
+      `${authored} is authored and must not be re-rolled`);
+  }
 });
 
 console.log(failures ? `\n${failures} check(s) failed` : '\nall engine checks passed');

@@ -4574,6 +4574,25 @@ def auto_roots(prog):
         if os.environ.get("DEVIRT_DEBUG") or os.environ.get("DEVIRT_TIMING"):
             sys.stderr.write("[*] Luraph bootstrap: %d functions from #%s (%.1fs)\n"
                              % (len(boot), caps[0][0], time.time() - t0))
+    # VM instances that emitted nothing are bootstrap/anti-tamper code, and a
+    # proto on one of them is not the script. The bootstrap walk above proves
+    # nothing about that by itself: it only records what the run executed, so a
+    # proto the bootstrap never *reached* passes the filter and is lifted as a
+    # root. Measured on a real v15.1 loader (CENZ STUDIO, 284 kB): the walk
+    # attributed 34 of the bootstrap VM's 35 protos, seq 30 was never reached,
+    # and it was lifted first as `payload_fn_30` -- a dead `if nil then` branch
+    # plus three upvalues written as globals (upv1/upv2/upv3). That single
+    # function was the whole reason the correct 4.9 kB lift beside it was
+    # thrown away as unusable.
+    #
+    # A seed exception was tried first and removed: `__maker` is a table holding
+    # a hex-encoded payload, so it yields no comparable integers, and the rule
+    # never fired. A guest-list rule that matches nothing is worse than none --
+    # it reads as a safeguard while doing no work.
+    quiet = _quiet_makers(prog, caps)
+    caps = [c for c in caps if str(c[2].get("__maker")) not in quiet]
+    if not caps:
+        return []
     # functions that never ran: Luraph's if created before the script started
     # (the first non-bootstrap function that ran), the script's after it -- a
     # callback nobody fired that no lifted code creates (code3: 18 of them)
@@ -4582,6 +4601,32 @@ def auto_roots(prog):
         return []
     return [{"seq": s, "key": k, "cap": c} for s, k, c, _, _ in caps
             if s not in boot and (s > first or not k.startswith("t"))]
+
+def _quiet_makers(prog, caps):
+    """{maker} of every VM instance that never executed a statement.
+
+    A VM whose protos all have zero `emit` is not running script code: it is
+    the bootstrap interpreter, an anti-tamper loader that bailed out, or a
+    decoy. Roots from it lift VM bookkeeping, not the script. Makers are only
+    judgeable when the run left execution evidence at all, so an old dump
+    without `emit` returns {} and changes nothing.
+
+    `emit` is keyed by proto id, not by `__seq` -- the two coincide on many
+    dumps, which is exactly why this is worth pinning down in the code."""
+    emits = prog.dump.raw.get("emit") or {}
+    if not emits:
+        return set()
+    live, quiet = set(), set()
+    for _seq, key, cap, _vm, _proto in caps:
+        maker = str(cap.get("__maker"))
+        n = emits.get(str(key))
+        try:
+            n = int(n or 0)
+        except (TypeError, ValueError):
+            n = 0
+        (live if n > 0 else quiet).add(maker)
+    return quiet - live
+
 
 def _lift_auto(prog, fl, roots):
     """auto_roots -> lines: each candidate no earlier root reached is lifted

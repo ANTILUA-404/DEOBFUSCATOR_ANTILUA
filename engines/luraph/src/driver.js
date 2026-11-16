@@ -124,6 +124,52 @@ function judgeLift(lifted, opts = {}) {
       + '-- the bootstrap VM was lifted instead of the script');
   }
 
+  // 8. Hidden VM state printed by name. codegen renders a `Pseudo` (numeric or
+  //    generic for-loop state) as `%s_%d` -- the VM's own variable name plus its
+  //    stack depth. Those are never declared, because the pseudo is supposed to
+  //    be consumed by the for-loop the lifter recognises; when that recognition
+  //    fails, the statement that binds the variable is gone and every use is
+  //    left dangling as a global.
+  //
+  //    A real v15.1 lift carried `c_1`, `p_1`, `N_1` this way -- syntax-valid
+  //    Luau (Luau parses an unknown name as a global), so every check above
+  //    passed it and the output read as a correct lift while three loop bounds
+  //    were undefined at run time.
+  //
+  //    The pattern is narrow on purpose: the name is the VM's own variable name
+  //    -- a short identifier with no digits -- and the suffix is a small stack
+  //    depth. The letter case is not fixed, because the VM's locals are not
+  //    (`N_1` was measured alongside `c_1` and `p_1` in the same lift). Ordinary
+  //    globals (`Players`, `game`) and the naming pass's wordlist (`str2`, `fn3`)
+  //    carry no underscore and can never match; a register name (`r2_1`) has
+  //    digits before the underscore, so it is a different shape and also passes.
+  //    A `local` statement can declare several names at once
+  //    (`local a, b, c = 0, 0, 0`), so every target before the `=` has to be
+  //    collected -- taking only the first would report the rest as leaked.
+  const declared = new Set();
+  for (const m of lifted.matchAll(/\blocal\s+function\s+([A-Za-z_]\w*)/g)) declared.add(m[1]);
+  for (const m of lifted.matchAll(/\blocal\s+([^=\n]*)/g)) {
+    for (const part of m[1].split(',')) {
+      const nm = part.trim().match(/^([A-Za-z_]\w*)/);
+      if (nm) declared.add(nm[1]);
+    }
+  }
+  for (const m of lifted.matchAll(/\bfunction\s+([A-Za-z_]\w*)\s*\(/g)) declared.add(m[1]);
+  for (const m of lifted.matchAll(/\bfor\s+([A-Za-z_][\w,\s]*?)\s+(?:=|in)\b/g)) {
+    for (const part of m[1].split(',')) declared.add(part.trim());
+  }
+  const pseudoGlobals = new Set();
+  for (const m of lifted.matchAll(/\b([A-Za-z][A-Za-z_]*_\d{1,2})\b/g)) {
+    const name = m[1];
+    if (declared.has(name)) continue;
+    if (!/^(?:[A-Za-z]|JIT\d+)_\d{1,2}$/.test(name)) continue;
+    pseudoGlobals.add(name);
+  }
+  if (pseudoGlobals.size > 0) {
+    problems.push(`${pseudoGlobals.size} hidden VM loop variable(s) printed as undeclared `
+      + `globals (${[...pseudoGlobals].slice(0, 6).join(', ')})`);
+  }
+
   return {
     ok: problems.length === 0,
     nilCalls,
@@ -134,6 +180,7 @@ function judgeLift(lifted, opts = {}) {
     deadBranches,
     dupBranches,
     runtimeStubs,
+    pseudoGlobals: [...pseudoGlobals],
     upvalueGlobals: [...upvalueGlobals],
     sizeCollapsed,
     problems,

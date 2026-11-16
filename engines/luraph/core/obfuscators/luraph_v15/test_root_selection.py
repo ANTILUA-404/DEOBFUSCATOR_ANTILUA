@@ -52,10 +52,18 @@ if CORE not in sys.path:
 failures = []
 
 
+class Skip(Exception):
+    """Raised when a check needs an artefact that is not in the tree (a large
+    captured dump is not worth committing). Reported as SKIP, never as PASS:
+    a check that did not run must not look like one that succeeded."""
+
+
 def check(name, fn):
     try:
         fn()
         print("PASS ", name)
+    except Skip as exc:
+        print("SKIP ", name, "->", exc)
     except Exception as exc:                      # noqa: BLE001 - report, keep going
         failures.append(name)
         print("FAIL ", name, "->", exc)
@@ -129,12 +137,89 @@ def test_payload_lifts_to_the_original_script():
     assert "if nil then" not in body, "a dead branch means the stub was lifted, not the script"
 
 
+# ---------------------------------------------------------------------------
+# A silent VM must not contribute a root.
+#
+# The fixture above cannot catch this: its bootstrap VM and its payload VM both
+# ran, and its payload sits on its own maker. A real v15.1 loader (CENZ STUDIO,
+# 284 kB, samples/Loader.luau) shows the shape that breaks the picker --
+#
+#   maker A: 35 protos, ZERO statements emitted (bootstrap / anti-tamper)
+#   maker B:  6 protos, the four that emitted (32, 36, 37, 39)
+#
+# -- and the bootstrap walk attributed 34 of A's 35 protos, missing seq 30.
+# That proto passed the "not bootstrap" filter, sorted FIRST by creation
+# number, and was lifted as `payload_fn_30`: a dead `if nil then` plus three
+# upvalues written as globals. The correct 4.9 kB lift sat beside it and was
+# thrown away as unusable, so the engine fell back to a behaviour trace.
+#
+# The dump is 1.1 MB, so it is not committed. The checks skip without it and
+# say so; regenerate with a normal engine run on the sample.
+SAMPLE = os.path.join(ROOT, "samples", "Loader.luau")
+SAMPLE_DUMPS = [
+    os.path.join(ROOT, d)
+    for d in (
+        "tmp-roots3/loader.out.protos.json",
+        "tmp-roots4/loader.out.protos.json",
+        "samples/output/loader.out.protos.json",
+    )
+]
+
+
+def _sample_pair():
+    for d in SAMPLE_DUMPS:
+        if os.path.isfile(d) and os.path.isfile(SAMPLE):
+            return SAMPLE, d
+    return None, None
+
+
+def test_a_silent_vm_contributes_no_roots():
+    src, protos_path = _sample_pair()
+    if src is None:
+        raise Skip("real sample or its captured dump not present")
+
+    from obfuscators.luraph_v15 import devirt
+
+    prog = devirt.Program(src, protos_path, ())
+    emits = prog.dump.raw.get("emit") or {}
+    assert emits, "the dump must carry execution evidence"
+
+    # Which makers emitted: that split is what the picker must respect.
+    makers = {}
+    for key, cap in prog.dump.protos.items():
+        makers.setdefault(str(cap.get("__maker")), []).append(
+            (cap.get("__seq") or 0, key))
+    live = {str(prog.dump.protos[k].get("__maker"))
+            for k in emits if k in prog.dump.protos}
+    assert len(live) < len(makers), (
+        "this sample must have a silent VM for the check to mean anything; "
+        "got %d live of %d makers" % (len(live), len(makers)))
+
+    roots = devirt.auto_roots(prog)
+    assert roots, "the sample must still yield roots"
+    for r in roots:
+        maker = str(r["cap"].get("__maker"))
+        assert maker in live, (
+            "root seq=%s (proto #%s) comes from a VM that emitted nothing"
+            % (r["seq"], r["key"]))
+
+    # The specific proto that poisoned the lift must be gone.
+    assert not any(str(r["key"]) == "25" for r in roots), (
+        "proto #25 (silent VM, seq 30) must not be lifted as the script")
+
+
 if __name__ == "__main__":
     if not os.path.isdir(FIXTURES):
         print("SKIP  fixtures not present")
         sys.exit(0)
     check("emit evidence identifies the payload proto", test_emit_evidence_identifies_the_payload)
     check("root follows execution rather than seed order", test_root_follows_execution_not_seed_order)
+    check("payload lifts to the original script", test_payload_lifts_to_the_original_script)
+    check("a silent VM contributes no root", test_a_silent_vm_contributes_no_roots)
+    if failures:
+        print("\n%d check(s) failed" % len(failures))
+        sys.exit(1)
+    print("\nall root-selection checks passed")
     check("payload lifts to the original script", test_payload_lifts_to_the_original_script)
     if failures:
         print("\n%d check(s) failed" % len(failures))

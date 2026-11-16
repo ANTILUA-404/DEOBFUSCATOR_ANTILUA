@@ -38,3 +38,7 @@ out.fail.luau
 # local screenshots / demo pages
 _*.png
 public/_*
+
+# scratch output from local engine runs on a real sample
+samples/output/
+tmp-roots*/
