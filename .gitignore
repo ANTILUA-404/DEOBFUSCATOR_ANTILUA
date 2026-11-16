@@ -39,6 +39,9 @@ out.fail.luau
 _*.png
 public/_*
 
+# a real third-party payload: keep it local, never commit someone else's sample
+samples/Loader.luau
+
 # scratch output from local engine runs on a real sample
 samples/output/
 tmp-roots*/
