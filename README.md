@@ -62,6 +62,10 @@ Luraph binaries executable. Nothing else to configure — the port comes from
 
 ## Known limits
 
+- **Luraph**: verified on two upstream samples (~280 KB each) whose output is
+  byte-identical to the reference files. A 1.5 MB sample did not finish inside a
+  5-minute local run, so large inputs need a longer job timeout
+  (`LURAPH` timeout is 6 min by default) and enough RAM.
 - **Luraph v14.x** is detected but not handled: the vendored engine only
   registers its v15 plugin, and the v14 pipeline in that repo is incomplete.
   A v14 sample is needed before adding it.
