@@ -103,6 +103,27 @@ function judgeLift(lifted, opts = {}) {
     problems.push('output contains no function, call or string literal');
   }
 
+  // 7. The output is the VM runtime, not the script. devirt.py emits one of
+  //    these stubs for every runtime function it found in the VM object, so a
+  //    lift largely made of them means the walker traversed the decoy bootstrap
+  //    VM instead of the payload. That output is well-formed Lua with real
+  //    calls and strings -- every check above passes it, and it is what a
+  //    284 KB sample produced as a "successful" devirtualization.
+  //
+  //    Thresholds calibrated on the real lift: a decoy-VM run produced only 2
+  //    stubs among 50 function keywords, so counting stubs alone cannot
+  //    distinguish it. What is unmistakable is a body where the stubs are the
+  //    content -- each is a three-line `local function ... error(...) end`, so
+  //    a body whose function definitions are mostly these is the runtime. A
+  //    stub that merely appears inside ordinary code is spared.
+  const runtimeStubs = (lifted.match(
+    /error\(\s*"Luraph runtime function, not devirtualized"\s*\)/g) || []).length;
+  const declaredFunctions = (lifted.match(/\blocal\s+function\b|\bfunction\b/g) || []).length;
+  if (runtimeStubs >= 3 && runtimeStubs * 2 >= declaredFunctions) {
+    problems.push(`${runtimeStubs} of ${declaredFunctions} function(s) are VM runtime stubs `
+      + '-- the bootstrap VM was lifted instead of the script');
+  }
+
   return {
     ok: problems.length === 0,
     nilCalls,
@@ -112,6 +133,7 @@ function judgeLift(lifted, opts = {}) {
     sourceBytes,
     deadBranches,
     dupBranches,
+    runtimeStubs,
     upvalueGlobals: [...upvalueGlobals],
     sizeCollapsed,
     problems,

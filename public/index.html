@@ -145,7 +145,7 @@
   select:disabled{opacity:.55;cursor:not-allowed}
 
   .job{
-    flex:1 1 auto;min-height:200px;overflow:auto;
+    flex:1 0 auto;min-height:200px;overflow:visible;
     background:#080b11;border:1px solid var(--border);border-radius:10px;
     font-family:var(--mono);font-size:11.5px;line-height:1.7;color:#93a1b8;
     padding:10px 12px;white-space:pre-wrap;word-break:break-word;
@@ -179,8 +179,12 @@
   .fp dt{color:var(--muted)}
   .fp dd{overflow-wrap:anywhere}
 
+  /* The code panel owns the scrolling. .panel-body is a scroll container too
+     (it holds stats/fingerprint above the code), so a nested overflow:auto here
+     with flex-basis 0 could collapse to its 200px floor while the outer body
+     scrolled, leaving the first lines framed off-screen and looking empty. */
   .code{
-    flex:1 1 0; min-height:200px; overflow:auto;
+    flex:1 0 auto; min-height:200px; overflow:visible;
     background:#080b11; border:1px solid var(--border); border-radius:10px;
     font-family:var(--mono); font-size:12px; line-height:1.6;
   }
@@ -188,9 +192,9 @@
   .gutter{
     padding:10px 10px 10px 12px; text-align:right; color:#3f4a5f;
     user-select:none; border-right:1px solid #151c28; background:#0a0e15;
-    position:sticky; left:0;
+    position:sticky; left:0; align-self:flex-start;
   }
-  .code pre{padding:10px 14px; white-space:pre; color:#d7deeb}
+  .code pre{padding:10px 14px; white-space:pre; color:#d7deeb; margin:0}
   .tok-kw{color:#c792ea}
   .tok-str{color:#a5e075}
   .tok-num{color:#f78c6c}
@@ -209,6 +213,7 @@
   .alert.err{background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.35);color:#fca5a5}
   .alert.warn{background:rgba(251,191,36,.07);border-color:rgba(251,191,36,.3);color:#fcd34d}
   .alert.ok{background:rgba(52,211,153,.07);border-color:rgba(52,211,153,.3);color:#6ee7b7}
+  .alert.info{background:rgba(34,211,238,.06);border-color:rgba(34,211,238,.28);color:#8fd8e8}
   .alert b{font-weight:700}
 
   .spinner{
@@ -327,6 +332,19 @@ const setDisplay = (id, value) => { const el = $(id); if (el) el.style.display =
 const setClass = (id, value) => { const el = $(id); if (el) el.className = value; };
 const srcEl = $('src'), drop = $('drop'), fileEl = $('file');
 let lastResult = null;
+
+/* Notes arrive in two shapes: plain strings (lib/deob.js) and
+   {level, message} objects (lib/profiles/luraph.js). Both must render as text;
+   interpolating an object used to yield "[object Object]" and silently ate the
+   warning that a Luraph result is only a partial trace. */
+const NOTE_LEVELS = { warn: 'warn', error: 'err', info: 'info', ok: 'ok' };
+function normalizeNote(n){
+  if (n && typeof n === 'object') {
+    const level = NOTE_LEVELS[n.level] || 'warn';
+    return { level, text: String(n.message ?? '') };
+  }
+  return { level: 'warn', text: String(n ?? '') };
+}
 
 /* ---------- engines ---------- */
 let engines = [];
@@ -545,20 +563,30 @@ function renderOk(d, ms){
   setDisplay('fpWrap', 'block');
 
   const notes = d.notes || [];
+  const partial = d.partial === true;
   const okMsg = {
     luraph: 'Engine Luraph selesai — output berasal dari devirtualisasi bytecode, bukan dari formatter kita.',
     prometheus: 'Engine Prometheus selesai — VM dilucuti dan konstanta didekripsi.',
   }[s.profile] || 'Struktur Lua valid — blok <code>function/if/for/while/do</code> seimbang, tidak ada artefak obfuscation tersisa.';
-  setHtml('notes', notes.length
-    ? notes.map(n => `<div class="alert warn"><span>⚠</span><span>${escapeHtml(n)}</span></div>`).join('')
-    : `<div class="alert ok"><span>✓</span><span>${okMsg}</span></div>`);
+
+  // A partial result must never read as a success banner. The server already
+  // flags it via `partial`, so the header reflects that instead of claiming
+  // a clean deobfuscation the engine did not deliver.
+  const okBlock = partial
+    ? `<div class="alert warn"><span>⚠</span><span><b>Hasil PARTIAL</b> — ini behaviour trace, `
+      + `bukan source penuh hasil devirtualisasi.</span></div>`
+    : `<div class="alert ok"><span>✓</span><span>${okMsg}</span></div>`;
+
+  setHtml('notes', notes.map(normalizeNote)
+    .map(n => `<div class="alert ${n.level}"><span>${{ warn: '⚠', err: '✕', info: 'i', ok: '✓' }[n.level] || '⚠'}</span>`
+      + `<span>${escapeHtml(n.text)}</span></div>`).join('') + okBlock);
 
   renderCode(d.code);
   setText('outMeta', `${new Blob([d.code]).size.toLocaleString('id-ID')} bytes`);
   setText('timing', ms >= 10000
     ? `selesai dalam ${Math.round(ms / 1000)} s`
     : `selesai dalam ${Math.round(ms)} ms`);
-  toast('Berhasil dideobfuscate');
+  toast(partial ? 'Hasil partial — behaviour trace, bukan source penuh' : 'Berhasil dideobfuscate');
 }
 
 function renderFail(d){

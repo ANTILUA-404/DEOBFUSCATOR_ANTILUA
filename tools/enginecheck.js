@@ -251,6 +251,43 @@ check('a small correct lift is not rejected by size alone', () => {
   assert.strictEqual(describeLiftFailure(verdict), '', 'no reason should be reported');
 });
 
+check('a lift made of VM runtime is rejected, not served as the script', () => {
+  const { judgeLift, describeLiftFailure } = require('../engines/luraph/src/driver');
+  // devirt.py emits this stub for every runtime function it finds in the VM
+  // object. Output consisting mainly of them means the walker traversed the
+  // decoy bootstrap VM instead of the payload -- well-formed Lua with real
+  // calls, so every structural check above passes it.
+  const runtime = [
+    'local function luraph_runtime1(...)',
+    '  error("Luraph runtime function, not devirtualized")',
+    'end',
+    'local function luraph_runtime2(...)',
+    '  error("Luraph runtime function, not devirtualized")',
+    'end',
+    'local function luraph_runtime3(...)',
+    '  error("Luraph runtime function, not devirtualized")',
+    'end',
+    'return luraph_runtime1',
+  ].join('\n');
+  const verdict = judgeLift(runtime, { sourceBytes: 284163 });
+  assert.strictEqual(verdict.ok, false, 'VM runtime must not pass as the deobfuscated script');
+  assert.ok(verdict.runtimeStubs >= 3, 'the runtime stubs must be counted');
+  assert.match(describeLiftFailure(verdict), /bootstrap VM was lifted instead of the script/);
+
+  // A real script that merely mentions the phrase must not be rejected.
+  const payload = [
+    'local ok, err = pcall(function()',
+    '  error("Luraph runtime function, not devirtualized")',
+    'end)',
+    'print("real script", ok)',
+    'print("second line")',
+    'print("third line")',
+  ].join('\n');
+  const fine = judgeLift(payload, { sourceBytes: 4000 });
+  assert.strictEqual(fine.ok, true,
+    'an isolated stub call in real code is not a runtime lift: ' + fine.problems.join('; '));
+});
+
 check('a genuine lift still passes the structural judge', () => {
   const { judgeLift } = require('../engines/luraph/src/driver');
   const real = [

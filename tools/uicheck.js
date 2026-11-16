@@ -63,6 +63,37 @@ renderProgress({ status: 'running', log: ['test'], elapsedMs: 1000 }, { version:
 setBusy(false);
 if (!$('runLabel')) throw new Error('runLabel missing after busy');
 if ($('runLabel').textContent !== 'Deobfuscate') throw new Error('label not restored');
+
+/* A Luraph result carries {level, message} notes; rendering them as text used
+   to produce "[object Object]" and hid the partial-trace warning entirely. */
+renderOk({
+  ok: true,
+  partial: true,
+  code: 'print("blah blah")\\n',
+  stats: { profile: 'luraph', inputBytes: 286259, outputBytes: 20 },
+  fingerprint: { profile: 'luraph', version: '15.1', confidence: 0.9 },
+  notes: [{ level: 'warn', message: 'Output ini behaviour trace, BUKAN source hasil devirtualisasi.' }],
+}, 1200);
+const noteHtml = $('notes').innerHTML;
+if (noteHtml.includes('[object Object]')) throw new Error('object note rendered as [object Object]');
+if (!noteHtml.includes('BUKAN source hasil devirtualisasi')) throw new Error('warn note text lost');
+if (/alert ok/.test(noteHtml)) throw new Error('a partial result must not show a success banner');
+if (!/alert warn/.test(noteHtml)) throw new Error('partial result must render a warning');
+if (!/PARTIAL/.test(noteHtml)) throw new Error('partial result must be labelled PARTIAL');
+
+/* A complete result still reads as success. */
+renderOk({
+  ok: true,
+  partial: false,
+  code: 'print("ok")\\n',
+  stats: { profile: 'luraph', inputBytes: 100, outputBytes: 12 },
+  fingerprint: { profile: 'luraph', version: '15.1' },
+  notes: [{ level: 'info', message: 'Lifter melaporkan 0 panggilan nil.' }],
+}, 900);
+if (/PARTIAL/.test($('notes').innerHTML)) throw new Error('a full result must not be labelled PARTIAL');
+if (!/alert ok/.test($('notes').innerHTML)) throw new Error('a full result must show a success banner');
+if (!/0 panggilan nil/.test($('notes').innerHTML)) throw new Error('info note text lost');
+if (!/alert info/.test($('notes').innerHTML)) throw new Error('info note lost its level');
 `;
 
 new Function(
@@ -71,3 +102,4 @@ new Function(
 )(document, fakeFetch, MockBlob, performance, navigator, url, noop, noop, console);
 
 console.log('PASS  UI label survives busy/poll/idle cycle');
+console.log('PASS  object notes render as text and partial results are labelled');
