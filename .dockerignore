@@ -4,3 +4,15 @@ node_modules
 sample.nxs9.lua
 out.fail.luau
 _*.luau
+_out_*.lua
+
+# Every prebuilt Luau binary is excluded, not just the Linux ones: the
+# Dockerfile compiles Luau inside the image (engines/luraph/build_luau.py) so
+# the binary always matches the image's glibc. A host .exe left in the context
+# is dead weight at best and a wrong-arch trap at worst.
+engines/luraph/bin/luau-linux
+engines/luraph/bin/luau
+engines/luraph/bin/luau-ast
+engines/luraph/bin/luau.exe
+engines/luraph/bin/luau-ast.exe
+engines/luraph/bin/luau.zip
