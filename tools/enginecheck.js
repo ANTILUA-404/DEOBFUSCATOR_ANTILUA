@@ -223,6 +223,37 @@ check('the trace banner cannot be eaten by the formatter', () => {
   assert.match(artifact, /reason: the lifter produced no output/);
 });
 
+check('a truncated lift is rejected even with zero nil calls', () => {
+  const { judgeLift, describeLiftFailure } = require('../engines/luraph/src/driver');
+  // Real report: this 12-line stub was served as "devirtualized source" for a
+  // 286 KB input. It has no (nil)( at all, so the old count-only rule passed it.
+  const stub = fs.readFileSync(path.join(root, 'tests/fixtures/luraph/truncated_stub.luau'), 'utf8');
+  const verdict = judgeLift(stub, { sourceBytes: 286259 });
+  assert.strictEqual(verdict.ok, false, 'a 12-line stub must not pass as a full lift');
+  assert.strictEqual(verdict.nilCalls, 0, 'the stub has no nil calls: the old rule was blind to it');
+  const reason = describeLiftFailure(verdict);
+  assert.match(reason, /stopped early/, 'size collapse must be reported');
+  assert.match(reason, /dead 'if nil/, 'dead branch must be reported');
+  assert.match(reason, /upvalue\(s\) assigned as globals/, 'scope loss must be reported');
+});
+
+check('a genuine lift still passes the structural judge', () => {
+  const { judgeLift } = require('../engines/luraph/src/driver');
+  const real = [
+    'local Players = game:GetService("Players")',
+    'local function greet(who)',
+    '  return "hello " .. tostring(who)',
+    'end',
+    'local player = Players.LocalPlayer',
+    'print(greet(player and player.Name or "world"))',
+    '',
+  ].join('\n');
+  const verdict = judgeLift(real, { sourceBytes: 4000 });
+  assert.strictEqual(verdict.ok, true, 'ordinary source must not be flagged: ' + verdict.problems.join('; '));
+  assert.strictEqual(verdict.deadBranches, 0);
+  assert.strictEqual(verdict.upvalueGlobals.length, 0);
+});
+
 check('Prometheus label payload formats without a dangling local', () => {
   const sample = fs.readFileSync(path.join(root, 'tests/fixtures/prometheus/WeAreDevs.lua'), 'latin1');
   const result = deobfuscatePrometheus(sample);

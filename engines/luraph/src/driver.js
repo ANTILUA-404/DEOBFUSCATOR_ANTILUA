@@ -25,17 +25,92 @@ function patchChunk(src, tmpdir, chunkTag) {
 /**
  * Decide whether a devirtualized lift is usable.
  *
- * The old rule was a single `(nil)(` count, which is a poor proxy: a short but
- * legitimate lift could be rejected, and the caller was never told that the
- * result had been swapped for a behaviour trace. Both outcomes are now returned
- * as data so the API can label them instead of silently downgrading.
+ * A `(nil)(` count alone is not enough. A real report showed a 12-line stub
+ * being accepted as "devirtualized source":
+ *
+ *     local v = ...
+ *     upv1 = v
+ *     local v2 = upv2
+ *     if nil then n = 1 ... else n = 1 end
+ *     upv2 = v2 + n
+ *
+ * No `(nil)(` anywhere, so the old rule passed it, yet it cannot be the
+ * program: `if nil then` can never run, the two branches assign the same
+ * value, and the upvalues the VM reads are written as globals. Those are
+ * structural tells and are checked directly.
  */
-function judgeLift(lifted) {
-  const nilCalls = (lifted.match(/\(nil\)\(/g) || []).length;
+function judgeLift(lifted, opts = {}) {
+  const sourceBytes = opts.sourceBytes || 0;
   const lines = lifted.split('\n').length;
   const stmts = (lifted.match(/[;{}]|\b(?:local|function|end|return|if|for|while)\b/g) || []).length;
-  const broken = nilCalls >= 50 && nilCalls * 100 >= lines;
-  return { ok: !broken, nilCalls, lines, stmts };
+  const nilCalls = (lifted.match(/\(nil\)\(/g) || []).length;
+  const bytes = Buffer.byteLength(lifted, 'utf8');
+  const problems = [];
+
+  // 1. Unresolved VM calls, as before.
+  if (nilCalls >= 50 && nilCalls * 100 >= lines) {
+    problems.push(`${nilCalls} unresolved calls of nil across ${lines} lines`);
+  }
+
+  // 2. A lift that is a rounding error next to its input was cut short. Real
+  //    source can legitimately be smaller than its obfuscated form, but not by
+  //    two orders of magnitude: this catches a stub standing in for a script.
+  if (sourceBytes > 20000 && bytes * 100 < sourceBytes) {
+    problems.push(`output is ${bytes} bytes against a ${sourceBytes} byte input `
+      + `(<1%), so the lift stopped early`);
+  }
+
+  // 3. Dead branches: `if nil` / `if false` can never take the then-branch, so
+  //    the represented control flow is not the real one.
+  const deadBranches = (lifted.match(/\bif\s+(?:nil|false)\s+then\b/g) || []).length;
+
+  // 4. Duplicated branch bodies: `if X then A else A end`. The lifter emitted
+  //    an identical statement on both sides, i.e. it lost the distinction.
+  const dupBranches =
+    (lifted.match(/\bif\b[^\n]*\bthen\b\s*\n?\s*([^\n;]+)\s*\n?\s*\belse\b\s*\n?\s*\1\s*(?:\n|$)/g) || []).length;
+
+  // 5. Upvalues promoted to globals. A Luraph chunk writes the VM's upvalues
+  //    through the chunk's own environment; the lifter had them in scope when
+  //    it produced the preamble (`local v2 = upv2`), so an unqualified
+  //    assignment to that name is a scope-loss bug, not a style choice.
+  const upvalueGlobals = new Set();
+  for (const m of lifted.matchAll(/^[ \t]*([A-Za-z_]\w*)\s*(?:=[^=]|\.\w+\s*=[^=]|\[[^\]]*\]\s*=[^=])/gm)) {
+    const name = m[1];
+    if (/^(?:up|upv|glb|env)\w*/i.test(name)) upvalueGlobals.add(name);
+  }
+
+  if (deadBranches > 0) problems.push(`${deadBranches} dead 'if nil/false' branch(es)`);
+  if (dupBranches > 0) problems.push(`${dupBranches} branch(es) with identical then/else bodies`);
+  if (upvalueGlobals.size > 0) {
+    problems.push(`${upvalueGlobals.size} upvalue(s) assigned as globals `
+      + `(${[...upvalueGlobals].slice(0, 6).join(', ')})`);
+  }
+
+  // 6. A lift with no structure at all: no function, no call, no string.
+  const hasCall = /\w\s*\(/.test(lifted);
+  const hasString = /["']/.test(lifted);
+  const hasFunction = /\bfunction\b/.test(lifted);
+  if (lines > 1 && !hasCall && !hasString && !hasFunction) {
+    problems.push('output contains no function, call or string literal');
+  }
+
+  return {
+    ok: problems.length === 0,
+    nilCalls,
+    lines,
+    stmts,
+    bytes,
+    sourceBytes,
+    deadBranches,
+    dupBranches,
+    upvalueGlobals: [...upvalueGlobals],
+    problems,
+  };
+}
+
+/** One-line reason suitable for a note or a log line. */
+function describeLiftFailure(verdict) {
+  return verdict.problems.join('; ');
 }
 
 async function run(job) {
@@ -223,15 +298,14 @@ async function run(job) {
 
   if (devirtOn && fs.existsSync(dpath)) {
     const lifted = fs.readFileSync(dpath, 'utf8');
-    const verdict = judgeLift(lifted);
+    const verdict = judgeLift(lifted, { sourceBytes: Buffer.byteLength(job.source, 'latin1') });
     if (verdict.ok) {
       process.stderr.write(`[*] devirtualized: ${verdict.stmts} statements, ${verdict.lines} lines, `
         + `${verdict.nilCalls} unresolved calls\n`);
       return { path: dpath, kind: 'devirtualized', stats: verdict };
     }
-    process.stderr.write(`[!] the devirtualized output looks broken (${verdict.nilCalls} calls of nil `
-      + `across ${verdict.lines} lines); falling back to a behaviour trace\n`);
-    liftFailure = `the lifter produced ${verdict.nilCalls} unresolved calls of nil across ${verdict.lines} lines`;
+    process.stderr.write(`[!] the devirtualized output is unusable: ${describeLiftFailure(verdict)}\n`);
+    liftFailure = describeLiftFailure(verdict);
     if (!job.debug) { try { fs.unlinkSync(dpath); } catch {} }
   }
 
@@ -286,4 +360,4 @@ async function runGeneric(job) {
   return { path: job.tracePath, kind: 'trace', reason: 'this obfuscator has no devirtualizer; the engine only records behaviour', stats: null };
 }
 
-module.exports = { run, runGeneric, judgeLift };
+module.exports = { run, runGeneric, judgeLift, describeLiftFailure };
