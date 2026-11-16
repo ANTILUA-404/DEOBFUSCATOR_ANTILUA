@@ -1,9 +1,16 @@
 from luasym import Const, Reg, Pseudo, Bin, TempVal
 
+# Pseudo writes that recognition could not fold into a `for` header are kept as
+# ordinary variables (see recognize/_run_once_for). `variables.rename` does not
+# create them, so backend.lower must be told about them explicitly or
+# `variables.declare` mistakes them for upvalues and never emits `local`.
+PROMOTED = set()
+
 def is_pseudo(e, name=None, depth=None):
     return isinstance(e, Pseudo) and (name is None or e.name == name) and (depth is None or e.depth == depth)
 
 def recognize(entry, blocks, D):
+    PROMOTED.clear()          # each function lowers with its own declaration set
     found = {"for": 0, "forin": 0}
     for h in list(blocks.values()):
         if h.id not in blocks:
@@ -26,10 +33,37 @@ def recognize(entry, blocks, D):
                 todo += list(x)
             elif hasattr(x, "__dict__") and not isinstance(x, type):
                 todo += list(x.__dict__.values())
+    # A Pseudo is hidden VM loop state. When try_numeric/try_generic recognise
+    # its loop they fold the state into a `for` header and place_prep removes the
+    # assignment, so dropping any leftover write used to be safe.
+    #
+    # It is not safe when recognition FAILS. The prep can live in a different
+    # block from the loop header (the CENZ loader sets `step`/`limit`/`index`
+    # while building its hash string, then reuses the same state in a second
+    # loop whose predecessors only copy the index out). try_numeric only looks
+    # for prep in the *same* block, so it bails out; the old code then deleted
+    # every write while leaving every read. Codegen renders a read as `c_1`,
+    # which is a global in Luau, so the output parsed cleanly but three loop
+    # bounds were undefined at run time.
+    #
+    # Keep an unrecognised pseudo write as a real variable instead. Its reads
+    # already render to the same `<name>_<depth>` text, so the result is
+    # declared state rather than a dangling global. Writes nobody reads are
+    # still dropped, and JIT state keeps its previous treatment.
+    import codegen
     for b in blocks.values():
-        b.stmts = [s for s in b.stmts if not (isinstance(s, D.Assign) and isinstance(s.target, Pseudo)
-                                              and not (s.target.name.startswith("JIT")
-                                                       and (s.target.name, s.target.depth) in read))]
+        kept = []
+        for s in b.stmts:
+            if isinstance(s, D.Assign) and isinstance(s.target, Pseudo):
+                key = (s.target.name, s.target.depth)
+                if key not in read:
+                    continue                 # dead VM bookkeeping
+                if not s.target.name.startswith("JIT"):
+                    name = "%s_%d" % key
+                    s.target = codegen.LocalName(name)
+                    PROMOTED.add(name)
+            kept.append(s)
+        b.stmts = kept
     return found
 
 def find_prep(h, blocks, D, names, depth):
@@ -162,7 +196,20 @@ def _run_once_for(h, s, blocks, D):
 
     def fn(x):
         return sub.get(x.name) if isinstance(x, Pseudo) and x.depth == d and x.name in sub else None
-    h.stmts = [x for x in h.stmts[:-1] if not (isinstance(x, D.Assign) and is_pseudo(x.target, None, d))]
+    # Substitute the pseudo reads with their values, but keep the writes as
+    # real variables. Deleting them here was only safe when no other loop
+    # reused the same VM state: a second loop downstream still reads `p`, `c`
+    # and `N`, and losing their initialisation left those reads as globals.
+    # Keep the assignment nodes, retargeting them to plain names; the read
+    # substitution above still applies to this loop's own condition.
+    kept = []
+    for x in h.stmts[:-1]:
+        if isinstance(x, D.Assign) and is_pseudo(x.target, None, d):
+            name = "%s_%d" % (x.target.name, x.target.depth)
+            x.target = codegen.LocalName(name)
+            PROMOTED.add(name)
+        kept.append(x)
+    h.stmts = kept
     h.cond = codegen.map_expr(h.cond, fn)
     for side in h.succ:
         sb = blocks[side]

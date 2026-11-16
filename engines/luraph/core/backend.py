@@ -28,7 +28,10 @@ def lower(entry_key, order, D, link, prefix, upnames, closure):
 
     entry = ST.thread_empty(entry, blocks)
     CG.simplify_blocks(blocks, D)
-    own = set(VR.rename(entry, blocks, prefix, set()).values())
+    # Loops that could not be folded into a `for` keep their VM state as
+    # ordinary variables. rename() never created those names, so declare()
+    # would otherwise treat them as upvalues and leave them as globals.
+    own = set(VR.rename(entry, blocks, prefix, set()).values()) | set(LP.PROMOTED)
     names = {("up", i): nm for i, nm in (upnames or {}).items()}
 
     def conv(x):
