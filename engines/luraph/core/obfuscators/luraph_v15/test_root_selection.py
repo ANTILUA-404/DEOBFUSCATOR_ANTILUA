@@ -1,20 +1,37 @@
 #!/usr/bin/env python3
 """Root-selection regression for the Luraph v15 lifter.
 
-Why this exists
----------------
+What the fixture actually contains
+----------------------------------
 tests/fixtures/luraph/obfuscated.lua captures 36 protos across two VM makers:
-the 35-proto anti-tamper VM seeded first, and the script's own single-proto VM
-seeded last (proto #32). The dump records that only proto #32 ever executed
-("emit": {"32": 1}), but the root picker ignored that and fell back to
-"first proto of the last VM", which lifted a 12-line stub assembled from VM
-bookkeeping instead of the script.
 
-The failure was silent: the lifter reported `0 unlifted blocks`, so every
-downstream heuristic that trusted that number accepted the stub.
+    maker ...,32373   -> 35 protos, ids 1..31, 33, 34 plus non-numeric t82/t307
+    maker ...,282243  ->  1 proto,  id 32, __seq 36 (seeded last)
 
-This check pins the observable contract -- the payload lifts to the script that
-the fixture says it should, and the root is chosen from execution evidence.
+The dump records that only proto #32 ever executed ("emit": {"32": 1}).
+
+So the payload is the lone proto on the *second* maker, and its id (32) is
+numerically smaller than ids the bootstrap VM also holds while sorting among
+35 competitors. A picker that used numeric order, or that took the first proto
+of the first VM, would lift VM bookkeeping instead of the script.
+
+Correction on the history
+-------------------------
+An earlier note claimed the root picker "fell back to first proto of the last
+VM" and lifted a 12-line stub. That was measured and is NOT what happens:
+proto 32 is the only proto on its maker *and* is seeded last, so the existing
+"last VM, payload first" rule already selects it. With DEVIRT_NO_EMIT_ROOT=1
+the selection is byte-identical. The emit-based signal is therefore an
+independent corroboration for this fixture, not the thing that fixed it.
+
+The unconditional failure it does prevent: a future sample where the payload
+VM also holds helper protos, and seed order no longer coincides with the
+executed one.
+
+What is pinned here
+-------------------
+The observable contract -- root selection lands on proto #32 and the payload
+lifts to the script the fixture says it should.
 
 Run: python engines/luraph/core/obfuscators/luraph_v15/test_root_selection.py
 """
@@ -64,6 +81,17 @@ def test_emit_evidence_identifies_the_payload():
     same_maker = [k for k, v in protos.items() if str(v.get("__maker")) == maker]
     assert same_maker == ["32"], "the payload VM must be a single proto, got %r" % (same_maker,)
     assert len(protos) > 30, "the bootstrap VM should have many protos, got %d" % len(protos)
+
+    # Pin the property that makes the fixture a real test rather than a lucky
+    # one: the payload id is NOT the numeric minimum, and the bootstrap VM
+    # holds ids on both sides of it. A numeric-order picker would get it wrong.
+    numeric = sorted(int(k) for k in protos if k.isdigit())
+    assert numeric[0] != 32, "proto 32 must not be the numeric minimum"
+    smaller = [k for k in protos if k.isdigit() and int(k) < 32]
+    larger = [k for k in protos if k.isdigit() and int(k) > 32]
+    assert smaller and larger, (
+        "competitors must exist on both sides of 32, got %d below and %d above"
+        % (len(smaller), len(larger)))
 
 
 def test_root_follows_execution_not_seed_order():
