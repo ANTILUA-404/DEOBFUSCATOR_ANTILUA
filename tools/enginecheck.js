@@ -14,7 +14,7 @@ const { execFileSync } = require('child_process');
 
 const deob = require('../lib/deob');
 const luraph = require('../lib/profiles/luraph');
-const prometheus = require('../engines/prometheus/src/index.js');
+const { deobfuscatePrometheus } = require('../lib/profiles/prometheus');
 
 const root = path.join(__dirname, '..');
 const luraphSample = fs.readFileSync(path.join(root, 'tests/fixtures/luraph/obfuscated.lua'), 'latin1');
@@ -59,8 +59,9 @@ check('Luraph v14 is detected and marked unsupported', () => {
 check('Prometheus engine rejects a Norev payload', () => {
   execFileSync(process.execPath, [path.join(root, 'tools/make_dispatcher_sample.js')], { cwd: root });
   const sample = fs.readFileSync(path.join(root, '_synthetic_dispatcher.luau'), 'latin1');
-  const report = prometheus.identify(sample, null);
-  assert.strictEqual(report.prometheus, false);
+  const result = deobfuscatePrometheus(sample);
+  assert.strictEqual(result.ok, false);
+  assert.match(result.error, /Prometheus/);
 });
 
 check('every result starts with the ANTILUA credit line', () => {
