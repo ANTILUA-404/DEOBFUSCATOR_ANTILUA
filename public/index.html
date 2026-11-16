@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NXS9 Deobfuscator — StudioDev57 Luau</title>
+<title>ANTILUA DEOBFUSCATOR — Luau &amp; Lua multi-engine</title>
 <style>
   :root{
     --bg:#0a0d13; --bg2:#0e131c; --panel:#121824; --panel2:#161e2c;
@@ -135,6 +135,25 @@
     background:#1c2434;border:1px solid var(--border);color:var(--muted);
   }
 
+  select{
+    font:inherit;font-size:12.5px;font-weight:600;
+    background:var(--panel2);color:var(--text);
+    border:1px solid var(--border);border-radius:9px;
+    padding:9px 10px;cursor:pointer;outline:none;max-width:200px;
+  }
+  select:focus{border-color:var(--accent)}
+  select:disabled{opacity:.55;cursor:not-allowed}
+
+  .job{
+    flex:1 1 auto;min-height:200px;overflow:auto;
+    background:#080b11;border:1px solid var(--border);border-radius:10px;
+    font-family:var(--mono);font-size:11.5px;line-height:1.7;color:#93a1b8;
+    padding:10px 12px;white-space:pre-wrap;word-break:break-word;
+  }
+  .job .head{color:var(--accent2);font-weight:600}
+  .job .ok{color:#6ee7b7}
+  .job .bad{color:#fca5a5}
+
   .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:8px}
   .stat{background:#0d121b;border:1px solid var(--border);border-radius:9px;padding:9px 11px}
   .stat b{display:block;font-size:16px;font-weight:700;letter-spacing:-.4px;font-variant-numeric:tabular-nums}
@@ -220,10 +239,10 @@
 <body>
 
 <header>
-  <div class="logo">N9</div>
+  <div class="logo">AN</div>
   <div class="brand">
-    <h1>NXS9 Deobfuscator</h1>
-    <p>StudioDev57 / NXS9 obfuscated Luau &rarr; readable source</p>
+    <h1>ANTILUA DEOBFUSCATOR</h1>
+    <p>Luraph &middot; Prometheus &middot; NXS9 &middot; Norev &mdash; Luau/Lua &rarr; readable source</p>
   </div>
   <div class="spacer"></div>
   <div class="badge" id="health"><span class="dot" id="healthDot"></span><span id="healthText">checking…</span></div>
@@ -243,10 +262,11 @@
         <span>atau klik untuk pilih — bisa juga paste langsung di bawah</span>
       </div>
       <input type="file" id="file" accept=".luau,.lua,.txt,.obf" hidden>
-      <textarea id="src" spellcheck="false" placeholder="--[[  STUDIODEV57::OBFUSCATED:LUAU ]] local _xxxx={…&#10;&#10;Paste script ter-obfuscate di sini, lalu tekan DEOBFUSCATE…"></textarea>
+      <textarea id="src" spellcheck="false" placeholder="-- paste script ter-obfuscate di sini (Luraph, Prometheus, NXS9, Norev)…&#10;&#10;atau drop file .luau / .lua di atas, lalu tekan DEOBFUSCATE"></textarea>
       <div id="err"></div>
     </div>
     <div class="panel-foot">
+      <select id="engine" title="Engine" disabled><option>memuat engine…</option></select>
       <button class="primary run" id="run"><span class="ico">▶</span><span id="runLabel">Deobfuscate</span></button>
       <button class="ghost" id="clear">Bersihkan</button>
       <div class="spacer"></div>
@@ -278,6 +298,7 @@
         <div>Hasil deobfuscation muncul di sini</div>
         <div style="font-size:11.5px;opacity:.75">Tekan <b>DEOBFUSCATE</b> untuk mulai</div>
       </div>
+      <div class="job" id="jobBox" style="display:none"></div>
       <div class="code" id="codeBox" style="display:none"><div class="code-inner"><div class="gutter" id="gutter"></div><pre id="code"></pre></div></div>
     </div>
     <div class="panel-foot" id="actions" style="display:none">
@@ -290,7 +311,9 @@
 </main>
 
 <footer>
-  <span>Pipeline: string-array decrypt &rarr; inline &rarr; bootstrap removal &rarr; constant folding &rarr; identifier renaming &rarr; format &amp; validate</span>
+  <span>Inline: string-array decrypt &rarr; inline &rarr; bootstrap removal &rarr; constant folding &rarr; rename &rarr; format</span>
+  <span>Luraph: sandbox trace &rarr; live constant decrypt &rarr; devirtualize &rarr; lift control flow</span>
+  <span style="color:#5c6a85">Deobfuscated By ANTILUA DEOBFUSCATOR</span>
 </footer>
 
 <div class="toast" id="toast"></div>
@@ -299,6 +322,20 @@
 const $ = (id) => document.getElementById(id);
 const srcEl = $('src'), drop = $('drop'), fileEl = $('file');
 let lastResult = null;
+
+/* ---------- engines ---------- */
+let engines = [];
+fetch('/api/engines').then(r => r.json()).then(d => {
+  engines = d.engines || [];
+  const sel = $('engine');
+  sel.innerHTML = engines.map(e =>
+    `<option value="${e.id}"${e.ready ? '' : ' disabled'}>${escapeHtml(e.label)}${e.ready ? '' : ' — tidak tersedia'}</option>`
+  ).join('');
+  sel.disabled = false;
+}).catch(() => {
+  $('engine').innerHTML = '<option value="auto">Auto-detect</option>';
+  $('engine').disabled = false;
+});
 
 /* ---------- health ---------- */
 fetch('/api/health').then(r => r.json()).then(() => {
@@ -342,22 +379,80 @@ async function run(){
   if (!source.trim()) return showErr('Paste dulu script-nya, baru tekan Deobfuscate.');
   setBusy(true);
   showErr('');
+  $('jobBox').style.display = 'none';
   const t0 = performance.now();
 
   try {
     const res = await fetch('/api/deobfuscate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source }),
+      body: JSON.stringify({ source, engine: $('engine').value || 'auto' }),
     });
     const data = await res.json();
-    if (!data.ok) renderFail(data);
-    else renderOk(data, performance.now() - t0);
+
+    if (data.queued) {
+      await pollJob(data.jobId, data.detection);
+    } else if (!data.ok) {
+      renderFail(data);
+    } else {
+      renderOk(data, performance.now() - t0);
+    }
   } catch (e) {
     showErr('Gagal menghubungi server: ' + e.message);
   } finally {
     setBusy(false);
   }
+}
+
+/* ---------- long-running engine (Luraph) ---------- */
+let pollTimer = null;
+
+function pollJob(id, detection){
+  return new Promise((resolve) => {
+    $('empty').style.display = 'none';
+    $('codeBox').style.display = 'none';
+    $('actions').style.display = 'none';
+    $('statsWrap').style.display = 'none';
+    $('fpWrap').style.display = 'none';
+    $('notes').innerHTML = '';
+    $('jobBox').style.display = 'block';
+    $('jobBox').innerHTML = '<div class="head">Menjalankan engine Luraph…</div>';
+    $('runLabel').textContent = 'Engine berjalan…';
+
+    const tick = async () => {
+      let j;
+      try {
+        j = await (await fetch('/api/jobs/' + id)).json();
+      } catch (e) {
+        showErr('Koneksi ke job terputus: ' + e.message);
+        return resolve();
+      }
+      renderProgress(j, detection);
+      if (j.status === 'done') {
+        $('jobBox').style.display = 'none';
+        renderOk(j.result, j.elapsedMs);
+        return resolve();
+      }
+      if (j.status === 'error') {
+        $('jobBox').style.display = 'none';
+        renderFail({ error: j.error || 'Engine gagal.', detail: (j.log || []).slice(-8).join('\n') });
+        return resolve();
+      }
+      pollTimer = setTimeout(tick, 1500);
+    };
+    tick();
+  });
+}
+
+function renderProgress(j, detection){
+  const lines = j.log || [];
+  const head = j.status === 'queued'
+    ? 'Menunggu giliran…'
+    : `Engine berjalan — ${Math.round((j.elapsedMs || 0) / 1000)}s` +
+      (detection && detection.version ? ` · Luraph v${detection.version}` : '');
+  $('jobBox').innerHTML = `<div class="head">${escapeHtml(head)}</div>\n` +
+    lines.slice(-14).map(l => escapeHtml(l)).join('\n');
+  $('jobBox').scrollTop = $('jobBox').scrollHeight;
 }
 
 $('run').addEventListener('click', run);
@@ -366,6 +461,8 @@ $('clear').addEventListener('click', () => {
   $('empty').style.display = 'flex'; $('codeBox').style.display = 'none';
   $('actions').style.display = 'none'; $('statsWrap').style.display = 'none';
   $('fpWrap').style.display = 'none'; $('notes').innerHTML = ''; $('outMeta').textContent = '';
+  $('jobBox').style.display = 'none'; $('timing').textContent = '';
+  clearTimeout(pollTimer); lastResult = null;
 });
 document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run(); });
 
@@ -377,25 +474,44 @@ function renderOk(d, ms){
   $('codeBox').style.display = 'block';
   $('actions').style.display = 'flex';
 
-  const isPlain = s.profile === 'plain';
-  const cards = isPlain
-    ? [['Konstanta', s.constantsFolded], ['Rename', s.identifiersRenamed],
-       ['KB masuk', Math.round((s.inputBytes || 0) / 1024)], ['KB keluar', Math.round((s.outputBytes || 0) / 1024)],
-       ['Baris', d.code.split('\n').length]]
-    : [['String', s.replaced], ['Unik', s.uniqueStrings], ['Entri', s.tableEntries],
-       ['Konst.', s.constantsFolded], ['Rename', s.identifiersRenamed],
-       ['Semantik', s.semanticNames], ['Baris', d.code.split('\n').length]];
+  const lines = d.code.split('\n').length;
+  const kbIn = Math.round((s.inputBytes || 0) / 1024);
+  const kbOut = Math.round((s.outputBytes || 0) / 1024);
+  const cards = (() => {
+    if (s.profile === 'plain') return [['Konstanta', s.constantsFolded], ['Rename', s.identifiersRenamed],
+      ['KB masuk', kbIn], ['KB keluar', kbOut], ['Baris', lines]];
+    if (s.profile === 'luraph') return [['KB masuk', kbIn], ['KB keluar', kbOut], ['Baris', lines]];
+    if (s.profile === 'prometheus') return [['String', s.replaced], ['Konst.', s.constantsFolded],
+      ['Fungsi', s.functions], ['Blok', s.blocks], ['Baris', lines]];
+    return [['String', s.replaced], ['Unik', s.uniqueStrings], ['Entri', s.tableEntries],
+      ['Konst.', s.constantsFolded], ['Rename', s.identifiersRenamed],
+      ['Semantik', s.semanticNames], ['Baris', lines]];
+  })();
   $('stats').innerHTML = cards
     .map(([k, v]) => `<div class="stat"><b>${(v ?? 0).toLocaleString('id-ID')}</b><span>${k}</span></div>`).join('');
   $('statsWrap').style.display = 'block';
 
   const f = d.fingerprint || {};
-  const PROFIL = { studiodev57: 'studiodev57', dispatcher: 'dispatcher (Norev-family)', plain: 'constant-only' };
-  const rows = [
-    ['Profil', PROFIL[f.profile] || 'studiodev57'],
-    ['Banner', f.banner || '—'],
-  ];
-  if (f.profile === 'dispatcher') {
+  const PROFIL = {
+    studiodev57: 'NXS9 / StudioDev57',
+    dispatcher: 'dispatcher (Norev-family)',
+    plain: 'constant-only',
+    luraph: 'Luraph v15 engine',
+    prometheus: 'Prometheus',
+  };
+  const rows = [['Engine', PROFIL[f.profile] || f.profile || '—']];
+  if (f.profile !== 'luraph' && f.profile !== 'prometheus') {
+    rows.push(['Banner', f.banner || '—']);
+  }
+  if (f.profile === 'luraph') {
+    rows.push(['Versi', f.version ? 'v' + f.version : 'tidak tertulis di header']);
+    rows.push(['Confidence', f.confidence != null ? Number(f.confidence).toFixed(2) : '—']);
+    rows.push(['Metode', 'trace di sandbox Luau offline + devirtualisasi bytecode']);
+  } else if (f.profile === 'prometheus') {
+    rows.push(['Signature', f.evidence || '—']);
+    rows.push(['Bobot deteksi', f.weight != null ? String(f.weight) : '—']);
+    rows.push(['Prelude dibuang', f.layers != null ? String(f.layers) : '—']);
+  } else if (f.profile === 'dispatcher') {
     rows.push(['Tabel string', `${f.entries} entri · getter #${f.getterIdx}`]);
     rows.push(['Cipher', (f.ciphers || []).map(c => `*${c.mul}+${c.add}+j*${c.mul2}`).join('  ·  ')]);
     rows.push(['Varian', (f.variantMap || []).map(v => `sel ${v.sel} → *${v.mul}`).join('  ·  ')]);
@@ -410,18 +526,24 @@ function renderOk(d, ms){
     rows.push(['Cipher', `M1=${c.M1} ADD=${c.ADD} I1=${c.I1} · I2=${c.I2} · M2=${c.M2} I3=${c.I3}`]);
     rows.push(['Variant', `len=p[${f.variant?.len}] stride=p[${f.variant?.stride}] ${f.variant?.chain ? 'chained' : 'plain'} ${f.variant?.order}`]);
   }
-  rows.push(['String bersih', `${((f.cleanRatio ?? 0) * 100).toFixed(1)}%`]);
+  if (f.cleanRatio != null) rows.push(['String bersih', `${(f.cleanRatio * 100).toFixed(1)}%`]);
   $('fp').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(String(v))}</dd>`).join('');
   $('fpWrap').style.display = 'block';
 
   const notes = d.notes || [];
+  const okMsg = {
+    luraph: 'Engine Luraph selesai — output berasal dari devirtualisasi bytecode, bukan dari formatter kita.',
+    prometheus: 'Engine Prometheus selesai — VM dilucuti dan konstanta didekripsi.',
+  }[s.profile] || 'Struktur Lua valid — blok <code>function/if/for/while/do</code> seimbang, tidak ada artefak obfuscation tersisa.';
   $('notes').innerHTML = notes.length
     ? notes.map(n => `<div class="alert warn"><span>⚠</span><span>${escapeHtml(n)}</span></div>`).join('')
-    : `<div class="alert ok"><span>✓</span><span>Struktur Lua valid — blok <code>function/if/for/while/do</code> seimbang, tidak ada artefak obfuscation tersisa.</span></div>`;
+    : `<div class="alert ok"><span>✓</span><span>${okMsg}</span></div>`;
 
   renderCode(d.code);
   $('outMeta').textContent = `${new Blob([d.code]).size.toLocaleString('id-ID')} bytes`;
-  $('timing').textContent = `selesai dalam ${Math.round(ms)} ms`;
+  $('timing').textContent = ms >= 10000
+    ? `selesai dalam ${Math.round(ms / 1000)} s`
+    : `selesai dalam ${Math.round(ms)} ms`;
   toast('Berhasil dideobfuscate');
 }
 
@@ -495,7 +617,7 @@ $('dl').addEventListener('click', () => {
   const blob = new Blob([lastResult.code], { type: 'text/plain;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = (lastResult.fingerprint?.tableName || 'deobfuscated') + '_deob.luau';
+  a.download = 'antilua_' + (lastResult.stats?.profile || 'deob') + '.luau';
   a.click();
   URL.revokeObjectURL(a.href);
   toast('File diunduh');

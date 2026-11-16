@@ -1,0 +1,6 @@
+.git
+node_modules
+*.log
+sample.nxs9.lua
+out.fail.luau
+_*.luau

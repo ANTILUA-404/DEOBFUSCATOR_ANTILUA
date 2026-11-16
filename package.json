@@ -1,8 +1,8 @@
 {
-  "name": "nxs9-deobfuscator",
-  "version": "1.0.0",
+  "name": "antilua-deobfuscator",
+  "version": "2.0.0",
   "private": true,
-  "description": "Web deobfuscator for StudioDev57 / NXS9 obfuscated Luau scripts",
+  "description": "ANTILUA DEOBFUSCATOR — multi-engine Luau/Lua deobfuscator (Luraph, Prometheus, NXS9, Norev)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -10,7 +10,8 @@
     "test": "node tools/selftest.js",
     "test:sweep": "node tools/selftest.js --sweep",
     "test:guard": "node tools/guard.js",
-    "test:all": "node tools/selftest.js --sweep && node tools/selftest.js --keep && node tools/guard.js && node tools/syntaxcheck.js sample.nxs9.lua"
+    "test:all": "node tools/selftest.js --sweep && node tools/selftest.js --keep && node tools/guard.js && node tools/enginecheck.js && node tools/syntaxcheck.js sample.nxs9.lua",
+    "test:engines": "node tools/enginecheck.js"
   },
   "engines": {
     "node": ">=18"
