@@ -19,9 +19,17 @@ needs a few minutes of tracing. `POST /api/deobfuscate` returns `202` with a
 `jobId`, and the client polls `GET /api/jobs/:id`. Everything else answers in
 the same request.
 
+Signatures from [`terrorlua/obfuscator-samples`](https://github.com/terrorlua/obfuscator-samples)
+are also used for *detection only* (`lib/profiles/family.js`). When an input
+belongs to a family without a deobfuscator (Hercules, MoonSec, SynapseXen, PSU,
+Ironbrew, Boronide, 77fuscator, LuaObfuscator, …), the API names the family in
+the error instead of replying "unknown format".
+
 ## Vendored engines
 
-Both third-party engines are MIT and kept unmodified under `engines/`:
+Both third-party engines are MIT and vendored under `engines/`. The Luraph copy
+is unmodified; the Prometheus copy carries a three-line fix for undefined
+constants in `src/beautify/jumps.js` (see Known limits).
 
 - `engines/luraph/` — [ServerDeadd/Luraph-v15.1-Deobfuscator](https://github.com/ServerDeadd/Luraph-v15.1-Deobfuscator)
   (Node driver + Python core + Luau binaries). The Linux CLI is stored as
@@ -66,10 +74,21 @@ Luraph binaries executable. Nothing else to configure — the port comes from
   byte-identical to the reference files. A 1.5 MB sample did not finish inside a
   5-minute local run, so large inputs need a longer job timeout
   (`LURAPH` timeout is 6 min by default) and enough RAM.
-- **Luraph v14.x** is detected but not handled: the vendored engine only
-  registers its v15 plugin, and the v14 pipeline in that repo is incomplete.
-  A v14 sample is needed before adding it.
-- **Prometheus** is wired end to end, but no real Prometheus sample was
-  available while building this, so the engine has only been checked against
-  false positives — not against a successful decode.
+- **Luraph v14.x** is detected and rejected with an explicit message. The
+  community v14 engine from `DiscordDeobBot-VIP-Smart-Deob.zip` was tested
+  against two real v14.7 samples from `terrorlua/obfuscator-samples` (181 KB and
+  1.2 MB). It reported `0 functions` captured in every devirtualization round:
+  the 1.2 MB sample only returned an intercepted `loadstring()` chunk that is
+  still VM bytecode, and the 181 KB sample failed with a runtime error. A second
+  pass over the recovered chunk failed too. The engine is therefore **not**
+  vendored — returning that output as "deobfuscated" would be misleading. Only
+  v15 / v15.1 are enabled.
+- **Prometheus**: verified on three real corpus samples (Strong, Weak and
+  WeAreDevs). The upstream formatter shipped three undefined constants
+  (`TAIL_STATEMENTS`, `TAIL_NODES`, `LEAVING_KINDS`) which made the `09-fmt` step
+  throw on labelled payloads and leave a dangling `local` in the output. They
+  are patched in `engines/prometheus/src/beautify/jumps.js`, and
+  `lib/profiles/prometheus.js` strips any remaining empty declaration as a
+  safety net. The Weak sample still emits `unstructured-loop` warnings from the
+  VM lifter, but its output parses as valid Lua.
 - Job state is in memory: a restart drops queued or finished jobs.

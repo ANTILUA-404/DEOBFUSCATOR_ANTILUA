@@ -15,6 +15,7 @@ const { execFileSync } = require('child_process');
 const deob = require('../lib/deob');
 const luraph = require('../lib/profiles/luraph');
 const { deobfuscatePrometheus } = require('../lib/profiles/prometheus');
+const { detectFamily } = require('../lib/profiles/family');
 
 const root = path.join(__dirname, '..');
 const luraphSample = fs.readFileSync(path.join(root, 'tests/fixtures/luraph/obfuscated.lua'), 'latin1');
@@ -56,12 +57,49 @@ check('Luraph v14 is detected and marked unsupported', () => {
   assert.strictEqual(hit.version, '14.7');
 });
 
+check('Luraph v14 rejection explains why the engine is disabled', () => {
+  const v14 = '-- This file was protected using Luraph Obfuscator v14.7 [https://lura.ph/]\nreturn setmetatable({},{})\n';
+  const result = deob.deobfuscate(v14);
+  assert.strictEqual(result.ok, false);
+  assert.match(result.error, /belum tersedia/);
+  assert.match(result.detail, /181 KB/);
+});
+
+check('Prometheus label payload formats without a dangling local', () => {
+  const sample = fs.readFileSync(path.join(root, 'tests/fixtures/prometheus/WeAreDevs.lua'), 'latin1');
+  const result = deobfuscatePrometheus(sample);
+  assert.strictEqual(result.ok, true, result.error || 'should deobfuscate');
+  assert.doesNotMatch(result.code, /^[ \t]*local[ \t]*$/m, 'output must not contain a bare local');
+  assert.strictEqual(
+    result.notes.filter((note) => /step failed/.test(note.message)).length,
+    0,
+    'no pipeline step should fail: ' + result.notes.join(' | ')
+  );
+});
+
 check('Prometheus engine rejects a Norev payload', () => {
   execFileSync(process.execPath, [path.join(root, 'tools/make_dispatcher_sample.js')], { cwd: root });
   const sample = fs.readFileSync(path.join(root, '_synthetic_dispatcher.luau'), 'latin1');
   const result = deobfuscatePrometheus(sample);
   assert.strictEqual(result.ok, false);
   assert.match(result.error, /Prometheus/);
+});
+
+check('unsupported corpus families are named, not called unknown', () => {
+  const samples = [
+    ['--[Obfuscated by Hercules v1.6.2] return (function() end)', 'hercules'],
+    ["_, Protected_by_MoonSecV2, Discord = 'x'", 'moonsec'],
+    ['local SynapseXen_llIIIllIi=select;', 'synapsexen'],
+    ['-- This script was generated using MoonVeil 2.0.12-beta [https://moonveil.cc]', 'moonveil'],
+    ['return(function(l,...)local R="This file was obfuscated using PSU Obfuscator 4.0.A"', 'psu'],
+    ['do local a=[[77fuscator 0.4.7 - discord.gg/kWy43Y9rR3]];', '77fuscator'],
+    ['local v0=string.char;local v1=string.byte;local v2=string.sub;', 'luaobfuscator'],
+  ];
+  for (const [src, id] of samples) {
+    const hit = detectFamily(src);
+    assert.ok(hit, 'missing family for ' + id);
+    assert.strictEqual(hit.id, id, 'wrong family for ' + id);
+  }
 });
 
 check('every result starts with the ANTILUA credit line', () => {

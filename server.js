@@ -126,8 +126,8 @@ function handleDeobfuscate(req, res) {
       if (detection.unsupported) {
         return sendJson(res, 422, {
           ok: false,
-          error: `Luraph v${detection.version} terdeteksi, tapi engine v14 belum terpasang di build ini.`,
-          detail: 'Engine yang tersedia hanya v15 / v15.1. Kirim sample v14 supaya bisa diverifikasi sebelum ditambahkan.',
+          error: `Luraph v${detection.version} terdeteksi, tapi deobfuscator v14 belum tersedia di build ini.`,
+          detail: luraph.V14_NOTE + ' Engine yang tersedia hanya v15 / v15.1.',
         });
       }
 

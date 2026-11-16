@@ -6,11 +6,19 @@ const { walk, collect } = require('../lua/walk');
 const { diverges, divergesBlock } = require('../util/flow');
 
 const TAILS = 8;
+// Upstream shipped several names without defining or wiring them, which made
+// the whole 09-fmt step throw as soon as a label was present. The half-finished
+// AST it left behind produced invalid Lua (a dangling `local`). Keep the
+// budgets small and conservative: tail threading is an optional cleanup, so
+// rejecting a tail is always safer than moving one.
+const TAIL_STATEMENTS = TAILS;
+const TAIL_NODES = TAILS * 8;
 
 const LOOPS = new Set([Kind.While, Kind.Repeat, Kind.NumericFor, Kind.GenericFor]);
 const LOOP_KINDS = LOOPS;
 
 const EXITS = new Set([Kind.Return, Kind.Break, Kind.Continue]);
+const LEAVING_KINDS = EXITS;
 
 function rootsOf(chunk) {
   const roots = [];
