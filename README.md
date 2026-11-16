@@ -25,6 +25,14 @@ belongs to a family without a deobfuscator (Hercules, MoonSec, SynapseXen, PSU,
 Ironbrew, Boronide, 77fuscator, LuaObfuscator, …), the API names the family in
 the error instead of replying "unknown format".
 
+Luraph is also recognised **without its version header** by structural VM
+fingerprints (`lib/profiles/luraph-pattern.js`): the v14 `return(function()local
+…=string.byte` entry, hex-escaped `getfenv()["\x.."]` API lookups, the `LPH`
+marker, and the v15 `return setmetatable({` VM root. Header-less v15 payloads
+are routed to the Luraph job; header-less v14 payloads get the explicit v14
+rejection. None of these signatures matched the Prometheus or NXS9 samples in
+the regression set.
+
 ## Vendored engines
 
 Both third-party engines are MIT and vendored under `engines/`. The Luraph copy
@@ -92,3 +100,9 @@ Luraph binaries executable. Nothing else to configure — the port comes from
   safety net. The Weak sample still emits `unstructured-loop` warnings from the
   VM lifter, but its output parses as valid Lua.
 - Job state is in memory: a restart drops queued or finished jobs.
+- **No obfuscator engine can guarantee 100% source recovery.** A successful
+  parse, a readable listing, or a decoded string table only proves that the
+  checks in `npm run test:all` passed for those samples. VMs with unresolved
+  handlers, anti-tamper paths, or large scripts that exceed the job timeout are
+  reported as failures or partial lifts, never presented as complete source.
+  The UI surfaces the engine log and warnings so the limit is visible.

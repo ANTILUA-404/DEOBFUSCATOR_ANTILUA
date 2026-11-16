@@ -10,7 +10,7 @@
     "test": "node tools/selftest.js",
     "test:sweep": "node tools/selftest.js --sweep",
     "test:guard": "node tools/guard.js",
-    "test:all": "node tools/selftest.js --sweep && node tools/selftest.js --keep && node tools/guard.js && node tools/enginecheck.js && node tools/syntaxcheck.js sample.nxs9.lua",
+    "test:all": "node tools/selftest.js --sweep && node tools/selftest.js --keep && node tools/guard.js && node tools/enginecheck.js && node tools/uicheck.js && node tools/syntaxcheck.js sample.nxs9.lua",
     "test:engines": "node tools/enginecheck.js"
   },
   "engines": {

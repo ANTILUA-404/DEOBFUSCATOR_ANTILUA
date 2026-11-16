@@ -57,6 +57,36 @@ check('Luraph v14 is detected and marked unsupported', () => {
   assert.strictEqual(hit.version, '14.7');
 });
 
+check('headerless Luraph v14 VM entry is detected structurally', () => {
+  const src = 'return(function()local a,b,c=string.byte,string.sub,loadstring;'
+    + 'local d=b([==[LPH:ABC]==]);return d;end)()';
+  const hit = luraph.detectEngine(src);
+  assert.strictEqual(hit.match, true);
+  assert.strictEqual(hit.unsupported, true);
+  assert.strictEqual(hit.plugin, 'luraph_v14_pattern');
+  assert.match(hit.evidence, /loadstring/);
+});
+
+check('headerless Luraph with hex-escaped APIs is detected', () => {
+  const src = 'return({m=function(self,...)local z=getfenv()["\\x73\\x74\\x72"];return z;end})';
+  const hit = luraph.detectEngine(src);
+  assert.strictEqual(hit.match, true);
+  assert.strictEqual(hit.unsupported, true);
+  assert.match(hit.evidence, /hex-escaped-api/);
+});
+
+check('structurally detected Luraph never reaches the inline router', () => {
+  const src = 'return(function()local a,b,c=string.byte,string.sub,loadstring;return b;end)()';
+  const result = deob.deobfuscate(src);
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.engine, 'luraph');
+});
+
+check('non-Luraph payloads are not claimed by pattern detection', () => {
+  const src = 'return(function(...)local w={"\\123\\045"};return w;end)(...)';
+  assert.strictEqual(luraph.detectEngine(src).match, false);
+});
+
 check('Luraph v14 rejection explains why the engine is disabled', () => {
   const v14 = '-- This file was protected using Luraph Obfuscator v14.7 [https://lura.ph/]\nreturn setmetatable({},{})\n';
   const result = deob.deobfuscate(v14);

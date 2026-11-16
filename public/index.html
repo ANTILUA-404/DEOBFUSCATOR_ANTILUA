@@ -267,7 +267,7 @@
     </div>
     <div class="panel-foot">
       <select id="engine" title="Engine" disabled><option>memuat engine…</option></select>
-      <button class="primary run" id="run"><span class="ico">▶</span><span id="runLabel">Deobfuscate</span></button>
+      <button class="primary run" id="run"><span class="ico" id="runIco">▶</span><span id="runLabel">Deobfuscate</span><span class="spinner" id="runSpinner" hidden></span></button>
       <button class="ghost" id="clear">Bersihkan</button>
       <div class="spacer"></div>
       <span class="meta"><kbd>Ctrl</kbd>+<kbd>Enter</kbd></span>
@@ -320,6 +320,11 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
+/* Never let a missing element turn a UI update into a failed deobfuscation. */
+const setText = (id, value) => { const el = $(id); if (el) el.textContent = value; };
+const setHtml = (id, value) => { const el = $(id); if (el) el.innerHTML = value; };
+const setDisplay = (id, value) => { const el = $(id); if (el) el.style.display = value; };
+const setClass = (id, value) => { const el = $(id); if (el) el.className = value; };
 const srcEl = $('src'), drop = $('drop'), fileEl = $('file');
 let lastResult = null;
 
@@ -328,35 +333,39 @@ let engines = [];
 fetch('/api/engines').then(r => r.json()).then(d => {
   engines = d.engines || [];
   const sel = $('engine');
-  sel.innerHTML = engines.map(e =>
-    `<option value="${e.id}"${e.ready ? '' : ' disabled'}>${escapeHtml(e.label)}${e.ready ? '' : ' — tidak tersedia'}</option>`
-  ).join('');
-  sel.disabled = false;
+  if (sel) {
+    sel.innerHTML = engines.map(e =>
+      `<option value="${e.id}"${e.ready ? '' : ' disabled'}>${escapeHtml(e.label)}${e.ready ? '' : ' — tidak tersedia'}</option>`
+    ).join('');
+    sel.disabled = false;
+  }
 }).catch(() => {
-  $('engine').innerHTML = '<option value="auto">Auto-detect</option>';
-  $('engine').disabled = false;
+  setHtml('engine', '<option value="auto">Auto-detect</option>');
+  const sel = $('engine'); if (sel) sel.disabled = false;
 });
 
 /* ---------- health ---------- */
 fetch('/api/health').then(r => r.json()).then(() => {
-  $('healthDot').className = 'dot ok'; $('healthText').textContent = 'online';
+  setClass('healthDot', 'dot ok'); setText('healthText', 'online');
 }).catch(() => {
-  $('healthDot').className = 'dot err'; $('healthText').textContent = 'offline';
+  setClass('healthDot', 'dot err'); setText('healthText', 'offline');
 });
 
 /* ---------- input meta ---------- */
 function updMeta(){
   const n = new Blob([srcEl.value]).size;
-  $('inMeta').textContent = n ? `${n.toLocaleString('id-ID')} bytes` : '0 bytes';
+  setText('inMeta', n ? `${n.toLocaleString('id-ID')} bytes` : '0 bytes');
 }
-srcEl.addEventListener('input', updMeta);
+if (srcEl) srcEl.addEventListener('input', updMeta);
 
 /* ---------- drop / file ---------- */
-drop.addEventListener('click', () => fileEl.click());
-['dragenter','dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('drag'); }));
-['dragleave','drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('drag'); }));
-drop.addEventListener('drop', ev => { const f = ev.dataTransfer.files[0]; if (f) loadFile(f); });
-fileEl.addEventListener('change', () => { if (fileEl.files[0]) loadFile(fileEl.files[0]); });
+if (drop) {
+  drop.addEventListener('click', () => fileEl && fileEl.click());
+  ['dragenter','dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('drag'); }));
+  ['dragleave','drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('drag'); }));
+  drop.addEventListener('drop', ev => { const f = ev.dataTransfer.files[0]; if (f) loadFile(f); });
+}
+if (fileEl) fileEl.addEventListener('change', () => { if (fileEl.files[0]) loadFile(fileEl.files[0]); });
 
 function loadFile(f){
   if (f.size > 8 * 1024 * 1024) return showErr('File terlalu besar (maks 8 MB).');
@@ -368,10 +377,14 @@ function loadFile(f){
 /* ---------- run ---------- */
 function setBusy(busy){
   const btn = $('run');
+  if (!btn) return;
   btn.disabled = busy;
-  btn.innerHTML = busy
-    ? '<span class="spinner"></span><span>Memproses…</span>'
-    : '<span class="ico">▶</span><span id="runLabel">Deobfuscate</span>';
+  /* Keep #runLabel in the DOM at all times. Replacing innerHTML here used to
+     delete it while a Luraph job was being polled, which threw in pollJob(). */
+  setText('runLabel', busy ? 'Memproses…' : 'Deobfuscate');
+  const ico = $('runIco'), spinner = $('runSpinner');
+  if (ico) ico.style.display = busy ? 'none' : 'inline';
+  if (spinner) spinner.hidden = !busy;
 }
 
 async function run(){
@@ -379,7 +392,7 @@ async function run(){
   if (!source.trim()) return showErr('Paste dulu script-nya, baru tekan Deobfuscate.');
   setBusy(true);
   showErr('');
-  $('jobBox').style.display = 'none';
+  setDisplay('jobBox', 'none');
   const t0 = performance.now();
 
   try {
@@ -398,7 +411,7 @@ async function run(){
       renderOk(data, performance.now() - t0);
     }
   } catch (e) {
-    showErr('Gagal menghubungi server: ' + e.message);
+    showErr('Gagal memproses: ' + e.message);
   } finally {
     setBusy(false);
   }
@@ -409,15 +422,15 @@ let pollTimer = null;
 
 function pollJob(id, detection){
   return new Promise((resolve) => {
-    $('empty').style.display = 'none';
-    $('codeBox').style.display = 'none';
-    $('actions').style.display = 'none';
-    $('statsWrap').style.display = 'none';
-    $('fpWrap').style.display = 'none';
-    $('notes').innerHTML = '';
-    $('jobBox').style.display = 'block';
-    $('jobBox').innerHTML = '<div class="head">Menjalankan engine Luraph…</div>';
-    $('runLabel').textContent = 'Engine berjalan…';
+    setDisplay('empty', 'none');
+    setDisplay('codeBox', 'none');
+    setDisplay('actions', 'none');
+    setDisplay('statsWrap', 'none');
+    setDisplay('fpWrap', 'none');
+    setHtml('notes', '');
+    setDisplay('jobBox', 'block');
+    setHtml('jobBox', '<div class="head">Menjalankan engine Luraph…</div>');
+    setText('runLabel', 'Engine berjalan…');
 
     const tick = async () => {
       let j;
@@ -429,12 +442,12 @@ function pollJob(id, detection){
       }
       renderProgress(j, detection);
       if (j.status === 'done') {
-        $('jobBox').style.display = 'none';
+        setDisplay('jobBox', 'none');
         renderOk(j.result, j.elapsedMs);
         return resolve();
       }
       if (j.status === 'error') {
-        $('jobBox').style.display = 'none';
+        setDisplay('jobBox', 'none');
         renderFail({ error: j.error || 'Engine gagal.', detail: (j.log || []).slice(-8).join('\n') });
         return resolve();
       }
@@ -450,18 +463,19 @@ function renderProgress(j, detection){
     ? 'Menunggu giliran…'
     : `Engine berjalan — ${Math.round((j.elapsedMs || 0) / 1000)}s` +
       (detection && detection.version ? ` · Luraph v${detection.version}` : '');
-  $('jobBox').innerHTML = `<div class="head">${escapeHtml(head)}</div>\n` +
-    lines.slice(-14).map(l => escapeHtml(l)).join('\n');
-  $('jobBox').scrollTop = $('jobBox').scrollHeight;
+  setHtml('jobBox', `<div class="head">${escapeHtml(head)}</div>\n` +
+    lines.slice(-14).map(l => escapeHtml(l)).join('\n'));
+  const box = $('jobBox');
+  if (box) box.scrollTop = box.scrollHeight;
 }
 
-$('run').addEventListener('click', run);
-$('clear').addEventListener('click', () => {
+const runBtn = $('run'); if (runBtn) runBtn.addEventListener('click', run);
+const clearBtn = $('clear'); if (clearBtn) clearBtn.addEventListener('click', () => {
   srcEl.value = ''; updMeta(); showErr('');
-  $('empty').style.display = 'flex'; $('codeBox').style.display = 'none';
-  $('actions').style.display = 'none'; $('statsWrap').style.display = 'none';
-  $('fpWrap').style.display = 'none'; $('notes').innerHTML = ''; $('outMeta').textContent = '';
-  $('jobBox').style.display = 'none'; $('timing').textContent = '';
+  setDisplay('empty', 'flex'); setDisplay('codeBox', 'none');
+  setDisplay('actions', 'none'); setDisplay('statsWrap', 'none');
+  setDisplay('fpWrap', 'none'); setHtml('notes', ''); setText('outMeta', '');
+  setDisplay('jobBox', 'none'); setText('timing', '');
   clearTimeout(pollTimer); lastResult = null;
 });
 document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') run(); });
@@ -470,9 +484,9 @@ document.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.ke
 function renderOk(d, ms){
   lastResult = d;
   const s = d.stats || {};
-  $('empty').style.display = 'none';
-  $('codeBox').style.display = 'block';
-  $('actions').style.display = 'flex';
+  setDisplay('empty', 'none');
+  setDisplay('codeBox', 'block');
+  setDisplay('actions', 'flex');
 
   const lines = d.code.split('\n').length;
   const kbIn = Math.round((s.inputBytes || 0) / 1024);
@@ -487,9 +501,9 @@ function renderOk(d, ms){
       ['Konst.', s.constantsFolded], ['Rename', s.identifiersRenamed],
       ['Semantik', s.semanticNames], ['Baris', lines]];
   })();
-  $('stats').innerHTML = cards
-    .map(([k, v]) => `<div class="stat"><b>${(v ?? 0).toLocaleString('id-ID')}</b><span>${k}</span></div>`).join('');
-  $('statsWrap').style.display = 'block';
+  setHtml('stats', cards
+    .map(([k, v]) => `<div class="stat"><b>${(v ?? 0).toLocaleString('id-ID')}</b><span>${k}</span></div>`).join(''));
+  setDisplay('statsWrap', 'block');
 
   const f = d.fingerprint || {};
   const PROFIL = {
@@ -527,35 +541,35 @@ function renderOk(d, ms){
     rows.push(['Variant', `len=p[${f.variant?.len}] stride=p[${f.variant?.stride}] ${f.variant?.chain ? 'chained' : 'plain'} ${f.variant?.order}`]);
   }
   if (f.cleanRatio != null) rows.push(['String bersih', `${(f.cleanRatio * 100).toFixed(1)}%`]);
-  $('fp').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(String(v))}</dd>`).join('');
-  $('fpWrap').style.display = 'block';
+  setHtml('fp', rows.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(String(v))}</dd>`).join(''));
+  setDisplay('fpWrap', 'block');
 
   const notes = d.notes || [];
   const okMsg = {
     luraph: 'Engine Luraph selesai — output berasal dari devirtualisasi bytecode, bukan dari formatter kita.',
     prometheus: 'Engine Prometheus selesai — VM dilucuti dan konstanta didekripsi.',
   }[s.profile] || 'Struktur Lua valid — blok <code>function/if/for/while/do</code> seimbang, tidak ada artefak obfuscation tersisa.';
-  $('notes').innerHTML = notes.length
+  setHtml('notes', notes.length
     ? notes.map(n => `<div class="alert warn"><span>⚠</span><span>${escapeHtml(n)}</span></div>`).join('')
-    : `<div class="alert ok"><span>✓</span><span>${okMsg}</span></div>`;
+    : `<div class="alert ok"><span>✓</span><span>${okMsg}</span></div>`);
 
   renderCode(d.code);
-  $('outMeta').textContent = `${new Blob([d.code]).size.toLocaleString('id-ID')} bytes`;
-  $('timing').textContent = ms >= 10000
+  setText('outMeta', `${new Blob([d.code]).size.toLocaleString('id-ID')} bytes`);
+  setText('timing', ms >= 10000
     ? `selesai dalam ${Math.round(ms / 1000)} s`
-    : `selesai dalam ${Math.round(ms)} ms`;
+    : `selesai dalam ${Math.round(ms)} ms`);
   toast('Berhasil dideobfuscate');
 }
 
 function renderFail(d){
   lastResult = null;
-  $('empty').style.display = 'flex';
-  $('codeBox').style.display = 'none';
-  $('actions').style.display = 'none';
-  $('statsWrap').style.display = 'none';
-  $('fpWrap').style.display = 'none';
-  $('notes').innerHTML = '';
-  $('outMeta').textContent = '';
+  setDisplay('empty', 'flex');
+  setDisplay('codeBox', 'none');
+  setDisplay('actions', 'none');
+  setDisplay('statsWrap', 'none');
+  setDisplay('fpWrap', 'none');
+  setHtml('notes', '');
+  setText('outMeta', '');
   showErr(d.error || 'Gagal memproses script.', d.detail);
 }
 
@@ -563,8 +577,8 @@ const MAX_LINES = 6000;
 function renderCode(code){
   const lines = code.split('\n');
   const shown = lines.slice(0, MAX_LINES);
-  $('code').innerHTML = shown.map(highlight).join('\n') + (lines.length > MAX_LINES ? '\n… (dipotong untuk tampilan)' : '');
-  $('gutter').innerHTML = shown.map((_, i) => i + 1).join('<br>');
+  setHtml('code', shown.map(highlight).join('\n') + (lines.length > MAX_LINES ? '\n… (dipotong untuk tampilan)' : ''));
+  setHtml('gutter', shown.map((_, i) => i + 1).join('<br>'));
 }
 
 /* minimal single-pass Lua highlighter */
@@ -606,13 +620,13 @@ function escapeHtml(s){
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 function showErr(msg, detail){
-  $('err').innerHTML = msg
+  setHtml('err', msg
     ? `<div class="alert err"><span>✕</span><span><b>${escapeHtml(msg)}</b>${detail ? '<br>' + escapeHtml(detail).replace(/\n/g, '<br>') : ''}</span></div>`
-    : '';
+    : '');
 }
 
 /* ---------- actions ---------- */
-$('dl').addEventListener('click', () => {
+const dlBtn = $('dl'); if (dlBtn) dlBtn.addEventListener('click', () => {
   if (!lastResult) return;
   const blob = new Blob([lastResult.code], { type: 'text/plain;charset=utf-8' });
   const a = document.createElement('a');
@@ -623,7 +637,7 @@ $('dl').addEventListener('click', () => {
   toast('File diunduh');
 });
 
-$('copy').addEventListener('click', async () => {
+const copyBtn = $('copy'); if (copyBtn) copyBtn.addEventListener('click', async () => {
   if (!lastResult) return;
   try { await navigator.clipboard.writeText(lastResult.code); toast('Disalin ke clipboard'); }
   catch { toast('Gagal menyalin'); }
@@ -632,6 +646,7 @@ $('copy').addEventListener('click', async () => {
 let toastT;
 function toast(msg){
   const t = $('toast');
+  if (!t) return;
   t.textContent = msg; t.classList.add('show');
   clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 1900);
 }
